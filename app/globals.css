@@ -1,0 +1,861 @@
+:root {
+  color-scheme: dark;
+  --bg: #08111d;
+  --panel: #121e31;
+  --panel-strong: #0d1728;
+  --text: #eef2fb;
+  --muted: #a9b6d2;
+  --line: #35507f;
+  --accent: #f2b84b;
+  --accent-strong: #d66c3f;
+  --shop-drawer-width: clamp(230px, 22vw, 280px);
+  --game-shop-shrink: clamp(80px, 9vw, 130px);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  padding: 0;
+  font-family: "Trebuchet MS", Verdana, sans-serif;
+  background:
+    radial-gradient(circle at top, rgba(116, 160, 255, 0.22), transparent 28%),
+    linear-gradient(180deg, #111c31 0%, #0b1321 45%, #08111d 100%);
+  color: var(--text);
+}
+
+body {
+  min-height: 100vh;
+}
+
+.battlePage {
+  min-height: 100vh;
+  padding: 28px 18px 40px;
+}
+
+.battleShell {
+  width: min(100%, 1120px);
+  margin: 0 auto;
+  background:
+    linear-gradient(180deg, rgba(22, 35, 59, 0.96), rgba(10, 18, 31, 0.98));
+  border: 4px solid var(--line);
+  border-radius: 24px;
+  padding: 24px;
+  box-shadow: 0 24px 70px rgba(0, 0, 0, 0.42);
+}
+
+.battleHeader {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  align-items: flex-start;
+  margin-bottom: 18px;
+}
+
+.kicker {
+  margin: 0 0 6px;
+  text-transform: uppercase;
+  letter-spacing: 0.2em;
+  font-size: 0.72rem;
+  color: var(--accent);
+}
+
+h1 {
+  margin: 0;
+  font-size: clamp(2.2rem, 4vw, 4rem);
+  line-height: 0.95;
+  font-family: Georgia, "Times New Roman", serif;
+}
+
+.intro {
+  margin: 10px 0 0;
+  color: var(--muted);
+  font-size: 1.05rem;
+  line-height: 1.5;
+}
+
+.battleStats {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.battleStats span {
+  border: 2px solid var(--line);
+  background: rgba(14, 24, 41, 0.85);
+  border-radius: 999px;
+  padding: 10px 14px;
+  font-weight: 700;
+  color: #ffe7aa;
+}
+
+.battleFrame {
+  position: relative;
+  width: 100%;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.05), rgba(255, 255, 255, 0)),
+    var(--panel-strong);
+  border: 4px solid #243b61;
+  border-radius: 20px;
+  padding: 14px;
+  transition: width 180ms ease;
+}
+
+.battleArenaRow {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 10px;
+  align-items: stretch;
+  position: relative;
+}
+
+.battleArenaRow.shopOpen {
+  padding-right: 0;
+}
+
+.battleArenaRow.shopOpen .battleFrame {
+  width: calc(100% - var(--game-shop-shrink));
+}
+
+.shopDrawerTab {
+  position: fixed;
+  top: 50%;
+  right: 18px;
+  z-index: 40;
+  transform: translateY(-50%);
+  min-height: 132px;
+  border: 3px solid #f2b84b;
+  border-radius: 18px;
+  padding: 12px 8px;
+  color: #101722;
+  background: linear-gradient(180deg, #ffd985, #d66c3f);
+  cursor: pointer;
+  display: grid;
+  place-items: center;
+  gap: 8px;
+  box-shadow: 0 16px 28px rgba(214, 108, 63, 0.25);
+}
+
+.shopDrawerTab span {
+  font-size: 1.45rem;
+  line-height: 1;
+}
+
+.shopDrawerTab strong {
+  writing-mode: vertical-rl;
+  text-transform: uppercase;
+  letter-spacing: 0.14em;
+}
+
+.shopDrawer {
+  display: none;
+  position: fixed;
+  top: 18px;
+  right: 18px;
+  bottom: 18px;
+  z-index: 35;
+  width: var(--shop-drawer-width);
+  min-width: 250px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  border: 4px solid #35507f;
+  border-radius: 20px;
+  padding: 14px;
+  background:
+    linear-gradient(180deg, rgba(18, 30, 49, 0.98), rgba(8, 17, 29, 0.98));
+}
+
+.shopDrawer.open {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.drawerSection {
+  border: 2px solid rgba(76, 110, 165, 0.72);
+  border-radius: 16px;
+  padding: 14px;
+  background: rgba(9, 18, 32, 0.78);
+}
+
+.drawerSection h2 {
+  margin: 0;
+  font-family: Georgia, "Times New Roman", serif;
+}
+
+.shopDrawer .shopActions {
+  margin-top: 12px;
+  display: grid;
+  grid-template-columns: 1fr;
+}
+
+.shopDrawer .shopButton,
+.shopDrawer .secondaryButton {
+  width: 100%;
+}
+
+.shopDrawerFooter {
+  margin-top: auto;
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 10px;
+}
+
+.arenaAbilityOverlay {
+  position: absolute;
+  inset: 14px;
+  display: grid;
+  place-items: center;
+  border-radius: 10px;
+  background:
+    radial-gradient(circle at center, rgba(242, 184, 75, 0.22), transparent 38%),
+    rgba(5, 10, 18, 0.76);
+  border: 4px solid rgba(242, 184, 75, 0.48);
+}
+
+.arenaAbilityPanel {
+  width: min(92%, 840px);
+  padding: 24px;
+  border: 4px solid #f2b84b;
+  border-radius: 20px;
+  background: rgba(9, 18, 32, 0.95);
+  box-shadow: 0 22px 50px rgba(0, 0, 0, 0.44);
+  text-align: center;
+}
+
+.arenaAbilityPanel h2,
+.arenaAbilityPanel p {
+  margin: 0;
+}
+
+.arenaAbilityPanel p:not(.shopKicker) {
+  color: var(--muted);
+  margin-top: 8px;
+}
+
+.arenaAbilityGrid,
+.characterGrid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+  margin-top: 18px;
+}
+
+.arenaAbilityCard,
+.characterCard {
+  border: 3px solid #4c6ea5;
+  border-radius: 16px;
+  padding: 16px;
+  color: var(--text);
+  background:
+    linear-gradient(180deg, rgba(76, 110, 165, 0.28), rgba(10, 18, 31, 0.94));
+  cursor: pointer;
+  font: inherit;
+  text-align: left;
+}
+
+.arenaAbilityCard:disabled {
+  opacity: 0.52;
+  cursor: not-allowed;
+}
+
+.dexInfoCard {
+  cursor: default;
+}
+
+.dexMystery {
+  min-height: 90px;
+  display: grid;
+  place-items: center;
+  font: 800 3.4rem "Courier New", monospace;
+  color: #ffe7aa;
+}
+
+.dexMysteryName {
+  display: block;
+  margin-top: auto;
+  text-align: center;
+  color: #d7e4ff;
+  font-weight: 700;
+}
+
+.dexBuyActions {
+  display: grid;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.dexBuyButton {
+  width: 100%;
+}
+
+.dexPreview {
+  position: relative;
+  min-height: 88px;
+  margin-bottom: 10px;
+  border: 2px solid rgba(167, 194, 242, 0.3);
+  border-radius: 14px;
+  background: linear-gradient(180deg, rgba(14, 24, 41, 0.92), rgba(8, 14, 24, 0.98));
+  overflow: hidden;
+}
+
+.dexPreviewTroop {
+  display: grid;
+  place-items: center;
+}
+
+.dexPreviewTroop .dexPreviewHead {
+  position: absolute;
+  top: 14px;
+  width: 20px;
+  height: 18px;
+  background: #f2f4f8;
+  border-radius: 4px;
+}
+
+.dexPreviewTroop .dexPreviewBody {
+  position: absolute;
+  top: 34px;
+  width: 28px;
+  height: 34px;
+  background: #d9e0ec;
+  border-radius: 6px;
+}
+
+.dexPreviewTroop .dexPreviewWeapon {
+  position: absolute;
+  top: 42px;
+  left: calc(50% + 10px);
+  width: 26px;
+  height: 6px;
+  background: #7f8da6;
+  border-radius: 4px;
+}
+
+.dexPreviewTroop .dexPreviewShield {
+  position: absolute;
+  top: 38px;
+  right: calc(50% + 10px);
+  width: 14px;
+  height: 22px;
+  background: linear-gradient(180deg, #c8d1e2, #7aa9e8);
+  border-radius: 6px;
+}
+
+.dexPreviewTroop-archer .dexPreviewHead,
+.dexPreviewTroop-archer .dexPreviewBody,
+.dexPreviewTroop-sniper .dexPreviewHead,
+.dexPreviewTroop-sniper .dexPreviewBody {
+  box-shadow: inset 0 -5px 0 #2f6fd6;
+}
+
+.dexPreviewTroop-shieldsman .dexPreviewHead,
+.dexPreviewTroop-shieldsman .dexPreviewBody {
+  box-shadow: inset 0 -5px 0 #6f7d99;
+}
+
+.dexPreviewWeaponCard {
+  display: grid;
+  place-items: center;
+}
+
+.dexPreviewWeaponCard .dexPreviewHandle {
+  position: absolute;
+  top: 40px;
+  width: 22px;
+  height: 8px;
+  background: #05070b;
+  border-radius: 3px;
+}
+
+.dexPreviewWeaponCard .dexPreviewBlade {
+  position: absolute;
+  top: 37px;
+  left: calc(50% + 10px);
+  width: 42px;
+  height: 4px;
+  border-radius: 4px;
+}
+
+.dexPreviewBladeBack {
+  left: auto;
+  right: calc(50% + 10px);
+}
+
+.dexPreviewWeapon-lightsaber .dexPreviewBlade {
+  background: #8fe6ff;
+  box-shadow: 0 0 12px rgba(143, 230, 255, 0.6);
+}
+
+.dexPreviewWeapon-double_lightsaber .dexPreviewBlade {
+  background: #b47cff;
+  box-shadow: 0 0 12px rgba(180, 124, 255, 0.62);
+}
+
+.dexPreviewWeapon-blaster .dexPreviewHandle,
+.dexPreviewWeapon-heavy_blaster .dexPreviewHandle,
+.dexPreviewWeapon-ion_blaster .dexPreviewHandle {
+  width: 30px;
+  height: 12px;
+  background: #222b3d;
+}
+
+.dexPreviewWeapon-blaster .dexPreviewBlade,
+.dexPreviewWeapon-heavy_blaster .dexPreviewBlade,
+.dexPreviewWeapon-ion_blaster .dexPreviewBlade {
+  top: 44px;
+  height: 5px;
+}
+
+.dexPreviewWeapon-blaster .dexPreviewBlade {
+  background: #8bd3ff;
+}
+
+.dexPreviewWeapon-heavy_blaster .dexPreviewBlade {
+  background: #ffb056;
+}
+
+.dexPreviewWeapon-ion_blaster .dexPreviewBlade {
+  background: #6effec;
+}
+
+.dexPreviewAbility {
+  display: grid;
+  place-items: center;
+}
+
+.dexPreviewAbility .dexPreviewAura {
+  position: absolute;
+  inset: 18px 28px;
+  border-radius: 999px;
+  opacity: 0.5;
+}
+
+.dexPreviewAbility .dexPreviewCore {
+  position: absolute;
+  top: 30px;
+  left: 50%;
+  width: 18px;
+  height: 18px;
+  transform: translateX(-50%);
+  border-radius: 5px;
+}
+
+.dexPreviewAbility-fireball .dexPreviewAura {
+  background: radial-gradient(circle, rgba(255, 155, 61, 0.82), transparent 70%);
+}
+
+.dexPreviewAbility-fireball .dexPreviewCore {
+  background: #ff9b3d;
+}
+
+.dexPreviewAbility-spike_trap .dexPreviewAura {
+  background: linear-gradient(180deg, transparent 25%, rgba(215, 224, 239, 0.25) 25%);
+}
+
+.dexPreviewAbility-spike_trap .dexPreviewCore {
+  background: linear-gradient(180deg, #d7e0ef 0%, #d7e0ef 40%, transparent 40%);
+  clip-path: polygon(50% 0, 100% 100%, 0 100%);
+}
+
+.dexPreviewAbility-dash_strike .dexPreviewAura {
+  background: linear-gradient(90deg, transparent, rgba(245, 247, 255, 0.7), transparent);
+}
+
+.dexPreviewAbility-dash_strike .dexPreviewCore {
+  background: #f5f7ff;
+}
+
+.dexPreviewAbility-heal_pulse .dexPreviewAura {
+  background: radial-gradient(circle, rgba(121, 242, 166, 0.65), transparent 72%);
+}
+
+.dexPreviewAbility-heal_pulse .dexPreviewCore {
+  background: #79f2a6;
+}
+
+.dexPreviewAbility-freeze_blast .dexPreviewAura {
+  background: radial-gradient(circle, rgba(159, 231, 255, 0.7), transparent 72%);
+}
+
+.dexPreviewAbility-freeze_blast .dexPreviewCore {
+  background: #9fe7ff;
+}
+
+.dexPreviewAbility-turret_droid .dexPreviewAura {
+  background: linear-gradient(180deg, transparent 50%, rgba(181, 226, 255, 0.45) 50%);
+}
+
+.dexPreviewAbility-turret_droid .dexPreviewCore {
+  background: #b5e2ff;
+}
+
+.dexPreviewAbility-shield_bubble .dexPreviewAura {
+  background: radial-gradient(circle, rgba(167, 216, 255, 0.35), rgba(167, 216, 255, 0.1));
+  border: 3px solid rgba(167, 216, 255, 0.7);
+}
+
+.dexPreviewAbility-shield_bubble .dexPreviewCore {
+  background: #dff7ff;
+}
+
+.dexPreviewAbility-coin_magnet .dexPreviewAura {
+  background: radial-gradient(circle, rgba(255, 226, 130, 0.72), transparent 72%);
+}
+
+.dexPreviewAbility-coin_magnet .dexPreviewCore {
+  background: #ffe282;
+}
+
+.arenaAbilityCard strong,
+.characterCard strong {
+  display: block;
+  color: #ffe7aa;
+  font-size: 1.05rem;
+  margin-bottom: 8px;
+}
+
+.arenaAbilityCard span,
+.characterCard span {
+  color: var(--muted);
+  line-height: 1.4;
+}
+
+.mathChallengeForm {
+  display: grid;
+  gap: 12px;
+  margin: 18px auto 0;
+  width: min(100%, 360px);
+}
+
+.mathQuestion {
+  color: #ffe7aa;
+  font: 700 1.6rem "Courier New", monospace;
+}
+
+.battleCanvas {
+  width: 100%;
+  height: auto;
+  display: block;
+  border-radius: 10px;
+  border: 4px solid #060b13;
+  image-rendering: pixelated;
+  background: #0d1728;
+}
+
+.battleDexButton {
+  position: absolute;
+  top: 82px;
+  right: 74px;
+  z-index: 8;
+  border: 3px solid #fff1c1;
+  border-radius: 999px;
+  padding: 9px 12px;
+  color: #101722;
+  background: linear-gradient(135deg, #ffe7aa, #f2b84b);
+  font: 800 0.78rem "Courier New", monospace;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  cursor: pointer;
+  box-shadow: 0 8px 20px rgba(242, 184, 75, 0.28);
+}
+
+.runSavesButton {
+  position: absolute;
+  top: 124px;
+  right: 74px;
+  z-index: 8;
+  border: 3px solid #d7e4ff;
+  border-radius: 999px;
+  padding: 9px 12px;
+  color: #eef2fb;
+  background: linear-gradient(135deg, #284978, #162744);
+  font: 800 0.76rem "Courier New", monospace;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  cursor: pointer;
+  box-shadow: 0 8px 20px rgba(22, 39, 68, 0.32);
+}
+
+.battleDexPanel {
+  max-height: calc(100% - 28px);
+  overflow-y: auto;
+  text-align: left;
+}
+
+.battleDexPanel h3 {
+  margin: 20px 0 0;
+  color: #ffe7aa;
+  font-family: Georgia, "Times New Roman", serif;
+}
+
+.battleDexActions {
+  margin-top: 18px;
+}
+
+.runSaveGrid {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.runSaveCard {
+  display: grid;
+  gap: 10px;
+}
+
+.runSavePreview {
+  width: 100%;
+  aspect-ratio: 16 / 9;
+  object-fit: cover;
+  border: 2px solid #4c6ea5;
+  border-radius: 12px;
+  background: #0d1728;
+}
+
+.runSavePreviewEmpty {
+  display: grid;
+  place-items: center;
+  color: #a9b6d2;
+  font-weight: 700;
+}
+
+.battleHud {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  flex-wrap: wrap;
+  margin-top: 16px;
+  color: var(--muted);
+}
+
+.battleHud p {
+  margin: 0;
+  line-height: 1.5;
+}
+
+.battleControls {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.troopSwitcher {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  margin-top: 10px;
+}
+
+.troopArrow {
+  min-width: 44px;
+  padding: 8px 0;
+  text-align: center;
+}
+
+.restartButton {
+  border: 0;
+  border-radius: 999px;
+  padding: 12px 18px;
+  font: inherit;
+  font-weight: 700;
+  color: #101722;
+  background: linear-gradient(135deg, var(--accent), var(--accent-strong));
+  cursor: pointer;
+  box-shadow: 0 10px 24px rgba(214, 108, 63, 0.24);
+}
+
+.restartButton:hover {
+  filter: brightness(1.06);
+}
+
+.restartButton:disabled,
+.shopButton:disabled,
+.menuButton:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+  box-shadow: none;
+  filter: none;
+}
+
+.menuPanel {
+  margin-bottom: 18px;
+  padding: 20px;
+  border: 3px solid #35507f;
+  border-radius: 18px;
+  background: rgba(12, 21, 35, 0.94);
+  display: grid;
+  gap: 10px;
+}
+
+.authActions {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.menuPanel h2,
+.shopPanel h2 {
+  margin: 0;
+  font-family: Georgia, "Times New Roman", serif;
+}
+
+.menuPanel p,
+.shopCopy {
+  margin: 0;
+  color: var(--muted);
+  line-height: 1.5;
+}
+
+.fieldLabel {
+  font-weight: 700;
+  color: #ffe7aa;
+}
+
+.textField {
+  width: 100%;
+  border: 2px solid #35507f;
+  border-radius: 12px;
+  background: #091220;
+  color: var(--text);
+  padding: 12px 14px;
+  font: inherit;
+}
+
+.textField:focus {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.menuError {
+  color: #ff9b88;
+  margin: 0;
+}
+
+.menuButton,
+.shopButton {
+  width: fit-content;
+  border: 0;
+  border-radius: 999px;
+  padding: 12px 18px;
+  font: inherit;
+  font-weight: 700;
+  color: #101722;
+  background: linear-gradient(135deg, var(--accent), var(--accent-strong));
+  cursor: pointer;
+  box-shadow: 0 10px 24px rgba(214, 108, 63, 0.24);
+}
+
+.secondaryButton {
+  width: fit-content;
+  border: 2px solid #4c6ea5;
+  border-radius: 999px;
+  padding: 10px 16px;
+  font: inherit;
+  font-weight: 700;
+  color: var(--text);
+  background: rgba(10, 18, 31, 0.88);
+  cursor: pointer;
+}
+
+.shopPanel {
+  margin-top: 18px;
+  padding: 20px;
+  border: 3px solid #35507f;
+  border-radius: 18px;
+  background: rgba(10, 18, 31, 0.96);
+  display: flex;
+  justify-content: space-between;
+  gap: 18px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.shopKicker {
+  margin: 0 0 6px;
+  text-transform: uppercase;
+  letter-spacing: 0.16em;
+  font-size: 0.72rem;
+  color: var(--accent);
+}
+
+.shopActions {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.settingsGrid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(180px, 1fr));
+  gap: 10px;
+}
+
+@media (max-width: 640px) {
+  .battlePage {
+    padding: 14px;
+  }
+
+  .battleShell {
+    padding: 16px;
+    border-radius: 18px;
+  }
+
+  .battleHeader {
+    flex-direction: column;
+  }
+
+  .battleStats {
+    justify-content: flex-start;
+  }
+
+  .battleHud {
+    align-items: flex-start;
+  }
+
+  .battleArenaRow,
+  .battleArenaRow.shopOpen {
+    grid-template-columns: 1fr;
+    padding-right: 0;
+  }
+
+  .battleArenaRow.shopOpen .battleFrame {
+    width: 100%;
+  }
+
+  .shopDrawerTab {
+    right: 10px;
+    min-height: auto;
+    grid-auto-flow: column;
+    justify-content: center;
+  }
+
+  .shopDrawerTab strong {
+    writing-mode: horizontal-tb;
+  }
+
+  .shopDrawer {
+    left: 14px;
+    right: 14px;
+    width: auto;
+    min-width: 0;
+  }
+
+  .shopPanel {
+    align-items: flex-start;
+  }
+
+  .settingsGrid {
+    grid-template-columns: 1fr;
+  }
+
+  .arenaAbilityGrid,
+  .characterGrid,
+  .runSaveGrid {
+    grid-template-columns: 1fr;
+  }
+}
