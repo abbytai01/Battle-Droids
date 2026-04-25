@@ -15,10 +15,12 @@ const USERS_STORAGE_KEY = "battle-droids-users";
 const PERMANENT_SHOP_KEY = "battle-droids-permanent-shop";
 const PERMANENT_CORES_KEY = "battle-droids-permanent-cores";
 const ACCOUNT_COINS_KEY = "battle-droids-account-coins";
+const GEMS_KEY = "battle-droids-gems";
 const CHARACTER_KEY = "battle-droids-character";
 const DEX_TROOPS_KEY = "battle-droids-dex-troops";
 const DEX_WEAPONS_KEY = "battle-droids-dex-weapons";
 const DEX_ABILITIES_KEY = "battle-droids-dex-abilities";
+const CLAIMED_QUESTS_KEY = "battle-droids-claimed-quests";
 const PERMANENT_TROOP_UPGRADES_KEY = "battle-droids-permanent-troop-upgrades";
 const RUN_SAVES_KEY = "battle-droids-run-saves";
 const RUN_SAVES_ENABLED_KEY = "battle-droids-run-saves-enabled";
@@ -55,7 +57,7 @@ const TROOP_NAMES = [
   "Nova"
 ];
 const BASE_WEAPONS: WeaponType[] = ["lightsaber", "blaster"];
-const RARE_WEAPONS: WeaponType[] = ["heavy_blaster", "double_lightsaber", "ion_blaster"];
+const RARE_WEAPONS: WeaponType[] = ["heavy_blaster", "double_lightsaber", "ion_blaster", "lightsaber_gun"];
 const ALL_TROOPS: AllyKind[] = ["squire", "archer", "shieldsman", "sniper"];
 const TROOP_UNLOCK_COSTS: Record<AllyKind, number> = {
   squire: 0,
@@ -75,13 +77,27 @@ const ALL_ABILITIES: AbilityKind[] = [
 ];
 const RARE_WEAPON_RUN_COST = 1000;
 const RARE_WEAPON_PERMANENT_COST = 10000;
+const GEM_CHEST_COST = 12;
+
+type QuestId =
+  | "get_everything"
+  | "droid_crusher"
+  | "boss_breaker"
+  | "treasure_hunter"
+  | "clone_commander";
 
 type EnemyKind = "scout" | "brute" | "commando" | "droideka" | "sith";
 type AllyKind = "squire" | "archer" | "shieldsman" | "sniper";
 type ScreenState = "menu" | "playing" | "gameover";
 type AuthView = "welcome" | "signin" | "signup" | "character";
 type MenuView = "main" | "howToPlay" | "permanentShop" | "highScore" | "settings";
-type WeaponType = "lightsaber" | "blaster" | "heavy_blaster" | "double_lightsaber" | "ion_blaster";
+type WeaponType =
+  | "lightsaber"
+  | "blaster"
+  | "heavy_blaster"
+  | "double_lightsaber"
+  | "ion_blaster"
+  | "lightsaber_gun";
 type JediCharacter = "Obi-Wan" | "Anakin" | "Mace Windu";
 type CoinKind = "silver" | "gold";
 type SpawnSide = "left" | "right";
@@ -230,6 +246,7 @@ type Player = {
   cooldownTimer: number;
   attackId: number;
   attackHits: number;
+  attackStyle: "normal" | "hybrid_melee";
   facing: 1 | -1;
   invuln: number;
   comboStep: number;
@@ -288,6 +305,8 @@ type GameState = {
   chestTimer: number;
   bossActive: boolean;
   bossWave: number;
+  chestsOpened: number;
+  bossesDefeated: number;
   nextEnemyId: number;
   nextAllyId: number;
   nextCoinId: number;
@@ -352,7 +371,46 @@ type PermanentTroopUpgradeMap = Record<
   }
 >;
 
+type QuestDefinition = {
+  id: QuestId;
+  name: string;
+  description: string;
+  rewardLabel: string;
+};
+
 const JEDI_CHARACTERS: JediCharacter[] = ["Obi-Wan", "Anakin", "Mace Windu"];
+const QUESTS: QuestDefinition[] = [
+  {
+    id: "get_everything",
+    name: "Get Everything",
+    description: "In one run, collect all troop types, all weapons, and all abilities shown in the Battle Dex.",
+    rewardLabel: "50 Gold"
+  },
+  {
+    id: "droid_crusher",
+    name: "Droid Crusher",
+    description: "Defeat 100 droids in one run.",
+    rewardLabel: "8 Gems"
+  },
+  {
+    id: "boss_breaker",
+    name: "Boss Breaker",
+    description: "Defeat a Sith boss.",
+    rewardLabel: "12 Gems"
+  },
+  {
+    id: "treasure_hunter",
+    name: "Treasure Hunter",
+    description: "Open 5 chests in one run.",
+    rewardLabel: "6 Gems"
+  },
+  {
+    id: "clone_commander",
+    name: "Clone Commander",
+    description: "Have 6 troops fighting for you at the same time.",
+    rewardLabel: "5 Gems"
+  }
+];
 
 type PermanentShop = {
   squire: number;
@@ -369,6 +427,7 @@ function clamp(value: number, min: number, max: number) {
 }
 
 function weaponLabel(weapon: WeaponType) {
+  if (weapon === "lightsaber_gun") return "Lightsaber Gun";
   if (weapon === "heavy_blaster") return "Heavy Blaster";
   if (weapon === "double_lightsaber") return "Double Lightsaber";
   if (weapon === "ion_blaster") return "Ion Blaster";
@@ -377,6 +436,7 @@ function weaponLabel(weapon: WeaponType) {
 }
 
 function weaponDescription(weapon: WeaponType) {
+  if (weapon === "lightsaber_gun") return "A hybrid weapon that shoots blasts and can slash up close with Q. Opens chests in 5 hits.";
   if (weapon === "heavy_blaster") return "Long range, heavy damage, and opens chests in 5 shots.";
   if (weapon === "double_lightsaber") return "Wide melee swings that can hit more enemies up close. Opens chests in 1 hit.";
   if (weapon === "ion_blaster") return "Shorter range, very strong shots with extra impact. Opens chests in 5 shots.";
@@ -385,6 +445,7 @@ function weaponDescription(weapon: WeaponType) {
 }
 
 function chestDamageForWeapon(weapon: WeaponType) {
+  if (weapon === "lightsaber_gun") return 2;
   if (weapon === "double_lightsaber") return 10;
   if (weapon === "lightsaber") return 5;
   if (weapon === "heavy_blaster" || weapon === "ion_blaster") return 2;
@@ -400,10 +461,11 @@ function isMeleeWeapon(weapon: WeaponType) {
 }
 
 function isRangedWeapon(weapon: WeaponType) {
-  return !isMeleeWeapon(weapon);
+  return weapon === "blaster" || weapon === "heavy_blaster" || weapon === "ion_blaster" || weapon === "lightsaber_gun";
 }
 
 function weaponRange(weapon: WeaponType) {
+  if (weapon === "lightsaber_gun") return 165;
   if (weapon === "heavy_blaster") return 220;
   if (weapon === "ion_blaster") return 150;
   if (weapon === "blaster") return 170;
@@ -574,6 +636,7 @@ function renderWeaponDexPreview(weapon: WeaponType) {
       <span className="dexPreviewHandle" />
       <span className="dexPreviewBlade" />
       {weapon === "double_lightsaber" ? <span className="dexPreviewBlade dexPreviewBladeBack" /> : null}
+      {weapon === "lightsaber_gun" ? <span className="dexPreviewMuzzle" /> : null}
     </div>
   );
 }
@@ -585,6 +648,60 @@ function renderAbilityDexPreview(ability: AbilityKind) {
       <span className="dexPreviewCore" />
     </div>
   );
+}
+
+function rareWeaponPriority(weapon: WeaponType) {
+  if (weapon === "ion_blaster") return 0;
+  if (weapon === "heavy_blaster") return 1;
+  if (weapon === "lightsaber_gun") return 2;
+  return 3;
+}
+
+function chooseRareWeaponChestOptions(lockedWeapons: WeaponType[]) {
+  const sortedLockedWeapons = [...lockedWeapons].sort(
+    (left, right) => rareWeaponPriority(left) - rareWeaponPriority(right)
+  );
+
+  if (sortedLockedWeapons.length <= 1) {
+    return sortedLockedWeapons;
+  }
+
+  if (sortedLockedWeapons.length === 2) {
+    const roll = Math.random();
+    if (roll < 0.62) return [sortedLockedWeapons[0]];
+    if (roll < 0.9) return [sortedLockedWeapons[1]];
+    return sortedLockedWeapons;
+  }
+
+  const [firstWeapon, secondWeapon, thirdWeapon, fourthWeapon] = sortedLockedWeapons;
+  const roll = Math.random();
+  if (sortedLockedWeapons.length >= 4) {
+    if (roll < 0.3) return [firstWeapon];
+    if (roll < 0.56) return [secondWeapon];
+    if (roll < 0.75) return [thirdWeapon];
+    if (roll < 0.87) return [fourthWeapon];
+    if (roll < 0.95) return [firstWeapon, secondWeapon];
+    return [firstWeapon, secondWeapon, thirdWeapon];
+  }
+  if (roll < 0.42) return [firstWeapon];
+  if (roll < 0.7) return [secondWeapon];
+  if (roll < 0.85) return [thirdWeapon];
+  if (roll < 0.95) return [firstWeapon, secondWeapon];
+  return [firstWeapon, secondWeapon, thirdWeapon];
+}
+
+function applyCharacterPerks(player: Player, character: JediCharacter | "") {
+  player.bonusDamage = 0;
+  player.cooldownBonus = 0;
+  if (character === "Anakin") {
+    player.cooldownBonus = 2;
+  } else if (character === "Mace Windu") {
+    player.bonusDamage = 1;
+  }
+}
+
+function characterDamageTaken(damage: number, character: JediCharacter | "") {
+  return character === "Obi-Wan" ? Math.max(0.5, damage * 0.8) : damage;
 }
 
 function randomSpawnSide(): SpawnSide {
@@ -620,6 +737,7 @@ function makeInitialState(): GameState {
       cooldownTimer: 0,
       attackId: 0,
       attackHits: 0,
+      attackStyle: "normal",
       facing: 1,
       invuln: 0,
       comboStep: 0,
@@ -675,6 +793,8 @@ function makeInitialState(): GameState {
     chestTimer: CHEST_MIN_DELAY + Math.random() * CHEST_RANDOM_DELAY,
     bossActive: false,
     bossWave: 0,
+    chestsOpened: 0,
+    bossesDefeated: 0,
     nextEnemyId: 1,
     nextAllyId: 1,
     nextCoinId: 1,
@@ -1508,21 +1628,33 @@ function drawPixelKnight(
     const gunX = facing === 1 ? handX + 1 : handX - 20;
     const isHeavyBlaster = player.weapon === "heavy_blaster";
     const isIonBlaster = player.weapon === "ion_blaster";
+    const isLightsaberGun = player.weapon === "lightsaber_gun";
     ctx.fillStyle = "#222b3d";
-    ctx.fillRect(gunX, handY - (isHeavyBlaster ? 3 : 1), isHeavyBlaster ? 28 : isIonBlaster ? 24 : 20, isHeavyBlaster ? 12 : isIonBlaster ? 11 : 9);
-    ctx.fillStyle = isHeavyBlaster ? "#8a5b32" : isIonBlaster ? "#2d8a86" : "#62718d";
-    ctx.fillRect(facing === 1 ? gunX + (isHeavyBlaster ? 24 : isIonBlaster ? 20 : 16) : gunX - 8, handY + 1, 10, 4);
-    ctx.fillStyle = isHeavyBlaster ? "#ffb056" : isIonBlaster ? "#6effec" : "#8bd3ff";
-    ctx.fillRect(gunX + 5, handY + 1, isHeavyBlaster ? 8 : isIonBlaster ? 7 : 5, 3);
+    ctx.fillRect(gunX, handY - (isHeavyBlaster ? 3 : 1), isHeavyBlaster ? 28 : isIonBlaster ? 24 : isLightsaberGun ? 24 : 20, isHeavyBlaster ? 12 : isIonBlaster ? 11 : isLightsaberGun ? 10 : 9);
+    ctx.fillStyle = isHeavyBlaster ? "#8a5b32" : isIonBlaster ? "#2d8a86" : isLightsaberGun ? "#58657e" : "#62718d";
+    ctx.fillRect(facing === 1 ? gunX + (isHeavyBlaster ? 24 : isIonBlaster ? 20 : isLightsaberGun ? 20 : 16) : gunX - 8, handY + 1, 10, 4);
+    ctx.fillStyle = isHeavyBlaster ? "#ffb056" : isIonBlaster ? "#6effec" : isLightsaberGun ? saber : "#8bd3ff";
+    ctx.fillRect(gunX + 5, handY + 1, isHeavyBlaster ? 8 : isIonBlaster ? 7 : isLightsaberGun ? 8 : 5, 3);
     ctx.fillStyle = "#111827";
     ctx.fillRect(facing === 1 ? gunX + 7 : gunX + 8, handY + 8, 5, 7);
+    if (isLightsaberGun) {
+      ctx.fillStyle = saber;
+      ctx.fillRect(facing === 1 ? gunX - 18 : gunX + 24, handY + 2, 18, 3);
+      ctx.fillStyle = "rgba(255, 255, 255, 0.7)";
+      ctx.fillRect(facing === 1 ? gunX - 12 : gunX + 28, handY + 3, 10, 1);
+    }
 
     if (player.attackTimer > 0) {
-      const muzzleX = facing === 1 ? gunX + (isHeavyBlaster ? 35 : isIonBlaster ? 31 : 27) : gunX - 11;
-      ctx.fillStyle = isHeavyBlaster ? "#ffb056" : isIonBlaster ? "#6effec" : "#8bd3ff";
-      ctx.fillRect(muzzleX, handY - 1, isHeavyBlaster ? 16 : isIonBlaster ? 14 : 12, 8);
-      ctx.fillStyle = isHeavyBlaster ? "rgba(255, 176, 86, 0.42)" : isIonBlaster ? "rgba(110, 255, 236, 0.42)" : "rgba(139, 211, 255, 0.42)";
-      ctx.fillRect(facing === 1 ? muzzleX + 10 : muzzleX - 18, handY, isHeavyBlaster ? 28 : isIonBlaster ? 24 : 20, 5);
+      if (isLightsaberGun && player.attackStyle === "hybrid_melee") {
+        ctx.fillStyle = "rgba(143, 230, 255, 0.35)";
+        ctx.fillRect(facing === 1 ? gunX + 10 : gunX - 18, handY - 6, 28, 16);
+      } else {
+        const muzzleX = facing === 1 ? gunX + (isHeavyBlaster ? 35 : isIonBlaster ? 31 : isLightsaberGun ? 31 : 27) : gunX - 11;
+        ctx.fillStyle = isHeavyBlaster ? "#ffb056" : isIonBlaster ? "#6effec" : isLightsaberGun ? "#8fe6ff" : "#8bd3ff";
+        ctx.fillRect(muzzleX, handY - 1, isHeavyBlaster ? 16 : isIonBlaster ? 14 : isLightsaberGun ? 14 : 12, 8);
+        ctx.fillStyle = isHeavyBlaster ? "rgba(255, 176, 86, 0.42)" : isIonBlaster ? "rgba(110, 255, 236, 0.42)" : isLightsaberGun ? "rgba(143, 230, 255, 0.42)" : "rgba(139, 211, 255, 0.42)";
+        ctx.fillRect(facing === 1 ? muzzleX + 10 : muzzleX - 18, handY, isHeavyBlaster ? 28 : isIonBlaster ? 24 : isLightsaberGun ? 24 : 20, 5);
+      }
     }
   }
 
@@ -1907,6 +2039,18 @@ function writeAccountCoins(username: string, silverCoins: number) {
   );
 }
 
+function readGems(username: string) {
+  if (typeof window === "undefined") return 0;
+  const raw = window.localStorage.getItem(userStorageKey(GEMS_KEY, username));
+  const parsed = raw ? Number.parseInt(raw, 10) : 0;
+  return Number.isFinite(parsed) ? Math.max(0, parsed) : 0;
+}
+
+function writeGems(username: string, gems: number) {
+  if (typeof window === "undefined") return;
+  window.localStorage.setItem(userStorageKey(GEMS_KEY, username), String(Math.max(0, gems)));
+}
+
 function readCharacter(username: string): JediCharacter | "" {
   if (typeof window === "undefined") return "";
   const raw = window.localStorage.getItem(userStorageKey(CHARACTER_KEY, username));
@@ -1980,6 +2124,27 @@ function writeDiscoveredAbilities(username: string, abilities: AbilityKind[]) {
   window.localStorage.setItem(
     userStorageKey(DEX_ABILITIES_KEY, username),
     JSON.stringify(Array.from(new Set(abilities.filter((ability) => ALL_ABILITIES.includes(ability)))))
+  );
+}
+
+function readClaimedQuests(username: string): QuestId[] {
+  if (typeof window === "undefined") return [];
+  try {
+    const raw = window.localStorage.getItem(userStorageKey(CLAIMED_QUESTS_KEY, username));
+    if (!raw) return [];
+    const parsed = JSON.parse(raw) as QuestId[];
+    if (!Array.isArray(parsed)) return [];
+    return parsed.filter((id): id is QuestId => QUESTS.some((quest) => quest.id === id));
+  } catch {
+    return [];
+  }
+}
+
+function writeClaimedQuests(username: string, quests: QuestId[]) {
+  if (typeof window === "undefined") return;
+  window.localStorage.setItem(
+    userStorageKey(CLAIMED_QUESTS_KEY, username),
+    JSON.stringify(Array.from(new Set(quests)))
   );
 }
 
@@ -2085,10 +2250,15 @@ export function KnightBattleGame() {
   const [selectedTroopIndex, setSelectedTroopIndex] = useState(0);
   const [shopDrawerOpen, setShopDrawerOpen] = useState(false);
   const [battleDexOpen, setBattleDexOpen] = useState(false);
+  const [questsOpen, setQuestsOpen] = useState(false);
   const [runSavesOpen, setRunSavesOpen] = useState(false);
   const [unlockedTroops, setUnlockedTroops] = useState<AllyKind[]>(["squire"]);
   const [unlockedRareWeapons, setUnlockedRareWeapons] = useState<WeaponType[]>([]);
   const [discoveredAbilities, setDiscoveredAbilities] = useState<AbilityKind[]>([]);
+  const [gems, setGems] = useState(0);
+  const [claimedQuests, setClaimedQuests] = useState<QuestId[]>([]);
+  const [questMessage, setQuestMessage] = useState("");
+  const [shopChestMessage, setShopChestMessage] = useState("");
   const [soundEffectsOn, setSoundEffectsOn] = useState(true);
   const [heartbeatOn, setHeartbeatOn] = useState(true);
   const [showAttackRange, setShowAttackRange] = useState(true);
@@ -2099,6 +2269,7 @@ export function KnightBattleGame() {
   const [currentRunSaveSlot, setCurrentRunSaveSlot] = useState<number | null>(null);
   const [runSaveMessage, setRunSaveMessage] = useState("");
   const rewardedScoreRef = useRef<number | null>(null);
+  const hybridSlashQueuedRef = useRef(false);
 
   const makeHud = (state: GameState): HudState => ({
     ...makeHudState(state),
@@ -2182,8 +2353,75 @@ export function KnightBattleGame() {
     setHud(makeHud(state));
   };
 
+  const questComplete = (questId: QuestId) => {
+    const state = stateRef.current;
+    if (questId === "get_everything") {
+      const troopKinds = new Set(state.allies.map((ally) => ally.kind));
+      const allWeaponsUnlocked = [...BASE_WEAPONS, ...RARE_WEAPONS].every((weapon) => isWeaponUnlocked(state.player, weapon));
+      const allAbilitiesUnlocked = ALL_ABILITIES.every((ability) => abilityLevel(state.player, ability) > 0);
+      return ALL_TROOPS.every((kind) => troopKinds.has(kind)) && allWeaponsUnlocked && allAbilitiesUnlocked;
+    }
+    if (questId === "droid_crusher") return state.player.kills >= 100;
+    if (questId === "boss_breaker") return state.bossesDefeated >= 1;
+    if (questId === "treasure_hunter") return state.chestsOpened >= 5;
+    return state.allies.length >= 6;
+  };
+
+  const claimQuestReward = (questId: QuestId) => {
+    if (claimedQuests.includes(questId) || !questComplete(questId)) return;
+    const nextClaimedQuests = [...claimedQuests, questId];
+    setClaimedQuests(nextClaimedQuests);
+    writeClaimedQuests(playerName || "Pilot", nextClaimedQuests);
+    if (questId === "get_everything") {
+      const nextSilver = stateRef.current.player.silverCoins + 500;
+      stateRef.current.player.silverCoins = nextSilver;
+      writeCurrentCoinBalance(nextSilver);
+      setQuestMessage("Quest complete: Get Everything! Reward: 50 Gold.");
+      setHud(makeHud(stateRef.current));
+      return;
+    }
+    const gemReward =
+      questId === "boss_breaker" ? 12 : questId === "droid_crusher" ? 8 : questId === "treasure_hunter" ? 6 : 5;
+    writeCurrentGems(gems + gemReward);
+    setQuestMessage(`Quest complete! Reward: ${gemReward} Gems.`);
+  };
+
+  const openGemChest = () => {
+    if (gems < GEM_CHEST_COST) return;
+    const state = stateRef.current;
+    writeCurrentGems(gems - GEM_CHEST_COST);
+    const roll = Math.random();
+    if (roll < 0.18) {
+      const lockedRare = RARE_WEAPONS.filter((weapon) => !isWeaponUnlocked(state.player, weapon));
+      if (lockedRare.length > 0) {
+        const weapon = lockedRare[Math.floor(Math.random() * lockedRare.length)];
+        persistWeaponUnlock(weapon);
+        setShopChestMessage(`Gem Chest reward: ${weaponLabel(weapon)}!`);
+        setHud(makeHud(state));
+        return;
+      }
+    }
+    if (roll < 0.55) {
+      const silverReward = 40 + Math.floor(Math.random() * 81);
+      state.player.silverCoins += silverReward;
+      writeCurrentCoinBalance(state.player.silverCoins);
+      setShopChestMessage(`Gem Chest reward: ${silverReward} Silver.`);
+    } else {
+      const goldReward = 2 + Math.floor(Math.random() * 7);
+      state.player.silverCoins += goldReward * 10;
+      writeCurrentCoinBalance(state.player.silverCoins);
+      setShopChestMessage(`Gem Chest reward: ${goldReward} Gold.`);
+    }
+    setHud(makeHud(state));
+  };
+
   const writeCurrentCoinBalance = (silverCoins: number) => {
     writeAccountCoins(playerName || "Pilot", silverCoins);
+  };
+
+  const writeCurrentGems = (nextGems: number) => {
+    setGems(nextGems);
+    writeGems(playerName || "Pilot", nextGems);
   };
 
   const playSound = (kind: "hit" | "shoot" | "block") => {
@@ -2248,13 +2486,10 @@ export function KnightBattleGame() {
   const grantChestReward = () => {
     const state = stateRef.current;
     const lockedWeapons = RARE_WEAPONS.filter((weapon) => !isWeaponUnlocked(state.player, weapon));
-    const rareWeapon = lockedWeapons.length > 0 && Math.random() < 0.12
-      ? lockedWeapons[Math.floor(Math.random() * lockedWeapons.length)]
-      : null;
+    const showRareWeapons = lockedWeapons.length > 0 && Math.random() < 0.12;
 
-    if (rareWeapon) {
-      const choices = Array.from(new Set<WeaponType>([rareWeapon, ...lockedWeapons])).slice(0, 3);
-      setRareWeaponChoices(choices);
+    if (showRareWeapons) {
+      setRareWeaponChoices(chooseRareWeaponChestOptions(lockedWeapons));
       return;
     }
     setAbilityChoices([...ALL_ABILITIES].sort(() => Math.random() - 0.5).slice(0, 3));
@@ -2294,17 +2529,22 @@ export function KnightBattleGame() {
     const savedTroops = readUnlockedTroops(username);
     const savedWeapons = readUnlockedWeapons(username);
     const savedAbilities = readDiscoveredAbilities(username);
+    const savedGems = readGems(username);
+    const savedClaimedQuests = readClaimedQuests(username);
     const savedRunSaves = readRunSaves(username);
     const savedRunSavesEnabled = readRunSavesEnabled(username);
     stateRef.current.player.silverCoins = savedCoins;
     stateRef.current.player.unlockedWeapons = [...BASE_WEAPONS, ...savedWeapons];
     stateRef.current.player.heavyBlasterUnlocked = savedWeapons.includes("heavy_blaster");
+    applyCharacterPerks(stateRef.current.player, savedCharacter);
     setSelectedCharacter(savedCharacter);
     setPermanentShop(savedShop);
     setPermanentCores(savedCores);
     setUnlockedTroops(savedTroops);
     setUnlockedRareWeapons(savedWeapons);
     setDiscoveredAbilities(savedAbilities);
+    setGems(savedGems);
+    setClaimedQuests(savedClaimedQuests);
     setRunSaves(savedRunSaves);
     setRunSavesEnabled(savedRunSavesEnabled);
     setSlotDraftNames(
@@ -2312,6 +2552,8 @@ export function KnightBattleGame() {
     );
     setCurrentRunSaveSlot(null);
     setRunSaveMessage("");
+    setQuestMessage("");
+    setShopChestMessage("");
     setHud({ ...makeHudState(stateRef.current), cores: savedCores });
   };
 
@@ -2354,6 +2596,7 @@ export function KnightBattleGame() {
     nextState.player.silverCoins = readAccountCoins(playerName || "Pilot");
     nextState.player.unlockedWeapons = [...BASE_WEAPONS, ...unlockedRareWeapons];
     nextState.player.heavyBlasterUnlocked = unlockedRareWeapons.includes("heavy_blaster");
+    applyCharacterPerks(nextState.player, selectedCharacter);
     stateRef.current = nextState;
     rewardedScoreRef.current = null;
     attackQueuedRef.current = false;
@@ -2368,6 +2611,9 @@ export function KnightBattleGame() {
     setMathChallenge(null);
     setMathAnswer("");
     setMathError("");
+    setQuestsOpen(false);
+    setQuestMessage("");
+    setShopChestMessage("");
     setRunSavesOpen(false);
     setCurrentRunSaveSlot(null);
     setHud(makeHud(nextState));
@@ -2397,10 +2643,15 @@ export function KnightBattleGame() {
     setTroopUpgradeOpen(false);
     setShopDrawerOpen(false);
     setBattleDexOpen(false);
+    setQuestsOpen(false);
     setRunSavesOpen(false);
     setUnlockedTroops(["squire"]);
     setUnlockedRareWeapons([]);
     setDiscoveredAbilities([]);
+    setGems(0);
+    setClaimedQuests([]);
+    setQuestMessage("");
+    setShopChestMessage("");
     setRunSaves([]);
     setSlotDraftNames({});
     setCurrentRunSaveSlot(null);
@@ -2414,7 +2665,9 @@ export function KnightBattleGame() {
   };
 
   const canUseLevelSkip = () =>
-    isSignedIn && playerName.trim().toLowerCase() === "cluper2320" && password.trim() === "1234";
+    isSignedIn &&
+    ["cluper2320", "owner cluper2320"].includes(playerName.trim().toLowerCase()) &&
+    password.trim() === "1234";
 
   const jumpToWave = (wave: number, pauseAfterJump: boolean) => {
     if (!canUseLevelSkip()) return;
@@ -2559,6 +2812,16 @@ export function KnightBattleGame() {
           setHud(makeHudState(stateRef.current));
           return;
         }
+        if (key.toLowerCase() === "q" && stateRef.current.player.weapon === "lightsaber_gun") {
+          attackQueuedRef.current = true;
+          hybridSlashQueuedRef.current = true;
+          return;
+        }
+        if (key.toLowerCase() === "w" && stateRef.current.player.weapon === "lightsaber_gun") {
+          attackQueuedRef.current = true;
+          hybridSlashQueuedRef.current = false;
+          return;
+        }
         if (key.toLowerCase() === "q") {
           cycleWeapon(stateRef.current.player);
           setHud(makeHudState(stateRef.current));
@@ -2576,6 +2839,11 @@ export function KnightBattleGame() {
         }
         if (key.toLowerCase() === "x" && isWeaponUnlocked(stateRef.current.player, "ion_blaster")) {
           stateRef.current.player.weapon = "ion_blaster";
+          setHud(makeHudState(stateRef.current));
+          return;
+        }
+        if (key.toLowerCase() === "r" && isWeaponUnlocked(stateRef.current.player, "lightsaber_gun")) {
+          stateRef.current.player.weapon = "lightsaber_gun";
           setHud(makeHudState(stateRef.current));
           return;
         }
@@ -2626,9 +2894,11 @@ export function KnightBattleGame() {
       if (
         key === " " &&
         screen === "playing" &&
-        !paused
+        !paused &&
+        stateRef.current.player.weapon !== "lightsaber_gun"
       ) {
         attackQueuedRef.current = true;
+        hybridSlashQueuedRef.current = false;
       }
 
       if (screen === "gameover" && key.toLowerCase() === "r") {
@@ -2779,6 +3049,8 @@ export function KnightBattleGame() {
           player.shieldBubbleTimer = 0;
           player.attackId += 1;
           player.attackHits = 0;
+          player.attackStyle = hybridSlashQueuedRef.current ? "hybrid_melee" : "normal";
+          hybridSlashQueuedRef.current = false;
           player.attackTimer = ATTACK_DURATION;
           player.cooldownTimer = Math.max(0.12, ATTACK_COOLDOWN - player.cooldownBonus * 0.03);
           player.comboStep = (player.comboStep % 3) + 1;
@@ -2832,17 +3104,18 @@ export function KnightBattleGame() {
           state.chestTimer = CHEST_MIN_DELAY + Math.random() * CHEST_RANDOM_DELAY;
         }
 
+        const hybridMeleeAttack = player.weapon === "lightsaber_gun" && player.attackStyle === "hybrid_melee";
         const slashBox =
-          player.attackTimer > 0 && isMeleeWeapon(player.weapon)
+          player.attackTimer > 0 && (isMeleeWeapon(player.weapon) || hybridMeleeAttack)
             ? {
                 x: player.facing === 1 ? player.x + player.w - 4 : player.x - weaponRange(player.weapon) + 4,
-                y: player.y + (player.weapon === "double_lightsaber" ? 8 : 12),
-                w: weaponRange(player.weapon),
+                y: player.y + (player.weapon === "double_lightsaber" ? 8 : hybridMeleeAttack ? 10 : 12),
+                w: hybridMeleeAttack ? 56 : weaponRange(player.weapon),
                 h: player.weapon === "double_lightsaber" ? 44 : 34
               }
             : null;
         const blasterBox =
-          player.attackTimer > 0 && isRangedWeapon(player.weapon)
+          player.attackTimer > 0 && isRangedWeapon(player.weapon) && !hybridMeleeAttack
             ? {
                 x: player.facing === 1
                   ? player.x + player.w
@@ -2902,6 +3175,7 @@ export function KnightBattleGame() {
             if (intersects(attackBox, player)) {
               const attackFromFront =
                 ((enemy.x + enemy.w / 2) - (player.x + player.w / 2)) * player.facing > 0;
+              const incomingDamage = characterDamageTaken(enemy.damage, selectedCharacter);
               const activeShieldBlocks = Math.max(
                 player.shieldBlocks,
                 player.shieldBubbleTimer > 0
@@ -2914,7 +3188,7 @@ export function KnightBattleGame() {
                 (player.hitsTaken + 1) % 2 === 0;
               player.hitsTaken += 1;
               if (shielded) {
-                player.health -= reduceDamageByShield(enemy.damage, activeShieldBlocks);
+                player.health -= reduceDamageByShield(incomingDamage, activeShieldBlocks);
                 playSound("block");
                 spawnParticleBurst(
                   state,
@@ -2924,7 +3198,7 @@ export function KnightBattleGame() {
                   "#a7d8ff"
                 );
               } else {
-                player.health -= enemy.damage;
+                player.health -= incomingDamage;
                 playSound("hit");
               }
               player.invuln = 0.75;
@@ -3017,6 +3291,8 @@ export function KnightBattleGame() {
             const baseDamage =
               player.weapon === "double_lightsaber"
                 ? player.comboStep === 3 ? 6.25 : 5.25
+                : player.weapon === "lightsaber_gun"
+                  ? player.attackStyle === "hybrid_melee" ? 4.75 : 3.25
                 : player.weapon === "heavy_blaster"
                   ? 3.5
                   : player.weapon === "ion_blaster"
@@ -3031,12 +3307,14 @@ export function KnightBattleGame() {
               damage,
               enemy.x + enemy.w / 2,
               enemy.y + enemy.h / 3,
-              isMeleeWeapon(player.weapon) ? "melee" : "ranged"
+              isMeleeWeapon(player.weapon) || hybridMeleeAttack ? "melee" : "ranged"
             );
             if (damaged) {
               const weaponKnockback =
                 player.weapon === "ion_blaster"
                   ? 22
+                  : player.weapon === "lightsaber_gun"
+                    ? player.attackStyle === "hybrid_melee" ? 16 : 12
                   : player.weapon === "heavy_blaster" ? 18 : player.weapon === "blaster" ? 8 : player.comboStep * 8;
               enemy.x += player.facing * (enemy.knockback + weaponKnockback);
             }
@@ -3051,6 +3329,8 @@ export function KnightBattleGame() {
                 ? "#ffb056"
                 : player.weapon === "ion_blaster"
                   ? "#6effec"
+                  : player.weapon === "lightsaber_gun"
+                    ? player.attackStyle === "hybrid_melee" ? "#8fe6ff" : "#8bd3ff"
                   : player.weapon === "double_lightsaber"
                     ? "#b47cff"
                 : player.weapon === "blaster"
@@ -3225,6 +3505,7 @@ export function KnightBattleGame() {
 
         state.chests = state.chests.filter((chest) => {
           if (chest.progress < 10) return true;
+          state.chestsOpened += 1;
           showChestMath();
           spawnParticleBurst(state, chest.x, chest.y, 12, "#ffe282");
           state.chestTimer = CHEST_MIN_DELAY + Math.random() * CHEST_RANDOM_DELAY;
@@ -3294,6 +3575,7 @@ export function KnightBattleGame() {
         });
         if (state.bossActive && state.enemies.length === 0) {
           state.bossActive = false;
+          state.bossesDefeated += 1;
           state.elapsed = state.wave * LEVEL_DURATION;
           state.spawnTimer = 1.8;
           spawnParticleBurst(state, player.x + player.w / 2, player.y + 20, 20, "#ffe282");
@@ -3407,6 +3689,7 @@ export function KnightBattleGame() {
         const chestRuleLineTwo = [
           isWeaponUnlocked(state.player, "heavy_blaster") ? "Heavy 5" : null,
           isWeaponUnlocked(state.player, "ion_blaster") ? "Ion 5" : null,
+          isWeaponUnlocked(state.player, "lightsaber_gun") ? "LS Gun 5" : null,
           state.player.fireballLevel > 0 ? "Fireball 2" : null
         ]
           .filter((rule): rule is string => Boolean(rule))
@@ -3842,6 +4125,7 @@ export function KnightBattleGame() {
             <span>Wave {waveWithinLevel(hud.wave)}/{WAVES_PER_LEVEL}</span>
             <span>Enemies {hud.enemyCount}</span>
             <span>Rank {hud.waveLabel}</span>
+            <span>Gems {gems}</span>
             <span>Cores {permanentCores}</span>
             <span>
               High Score {highScore.score} - {highScore.name} L{highScore.level} W{waveWithinLevel(highScore.wave)}/{WAVES_PER_LEVEL}
@@ -4094,13 +4378,17 @@ export function KnightBattleGame() {
                       writePermanentShop(username, makePermanentShop());
                       writePermanentCores(username, 0);
                       writeAccountCoins(username, 0);
+                      writeGems(username, 0);
                       writeUnlockedTroops(username, ["squire"]);
                       writeUnlockedWeapons(username, []);
                       writeDiscoveredAbilities(username, []);
+                      writeClaimedQuests(username, []);
                       setSelectedCharacter("");
                       setUnlockedTroops(["squire"]);
                       setUnlockedRareWeapons([]);
                       setDiscoveredAbilities([]);
+                      setGems(0);
+                      setClaimedQuests([]);
                       stateRef.current.player.silverCoins = 0;
                       setHud({ ...makeHudState(stateRef.current), cores: 0 });
                       setIsSignedIn(true);
@@ -4137,6 +4425,13 @@ export function KnightBattleGame() {
           {isSignedIn ? (
             <>
               <button
+                className="questsButton"
+                type="button"
+                onClick={() => setQuestsOpen(true)}
+              >
+                Quests
+              </button>
+              <button
                 className="battleDexButton"
                 type="button"
                 onClick={() => setBattleDexOpen(true)}
@@ -4151,6 +4446,42 @@ export function KnightBattleGame() {
                 Run Saves
               </button>
             </>
+          ) : null}
+          {questsOpen ? (
+            <div className="arenaAbilityOverlay">
+              <div className="arenaAbilityPanel battleDexPanel">
+                <p className="shopKicker">Quests</p>
+                <h2>Mission Board</h2>
+                <p>Complete quests for rewards. Gems can be spent on gem chests in the shop.</p>
+                {questMessage ? <p>{questMessage}</p> : null}
+                <div className="arenaAbilityGrid">
+                  {QUESTS.map((quest) => {
+                    const completed = questComplete(quest.id);
+                    const claimed = claimedQuests.includes(quest.id);
+                    return (
+                      <div key={quest.id} className="arenaAbilityCard dexInfoCard">
+                        <strong>{quest.name}</strong>
+                        <span>{quest.description}</span>
+                        <span>Reward: {quest.rewardLabel}</span>
+                        <button
+                          className="shopButton dexBuyButton"
+                          type="button"
+                          disabled={!completed || claimed}
+                          onClick={() => claimQuestReward(quest.id)}
+                        >
+                          {claimed ? "Claimed" : completed ? "Claim Reward" : "In Progress"}
+                        </button>
+                      </div>
+                    );
+                  })}
+                </div>
+                <div className="authActions battleDexActions">
+                  <button className="secondaryButton" type="button" onClick={() => setQuestsOpen(false)}>
+                    Close Quests
+                  </button>
+                </div>
+              </div>
+            </div>
           ) : null}
           {runSavesOpen ? (
             <div className="arenaAbilityOverlay">
@@ -4699,6 +5030,24 @@ export function KnightBattleGame() {
                   </button>
                 </div>
               </section>
+              <section className="drawerSection">
+                <p className="shopKicker">Gem Chests</p>
+                <h2>Open With Gems</h2>
+                <p className="shopCopy">
+                  Spend gems for a chest. Sometimes you get silver, sometimes gold, and sometimes a rare weapon.
+                </p>
+                {shopChestMessage ? <p className="shopCopy">{shopChestMessage}</p> : null}
+                <div className="shopActions">
+                  <button
+                    className="shopButton"
+                    type="button"
+                    disabled={gems < GEM_CHEST_COST}
+                    onClick={openGemChest}
+                  >
+                    Gem Chest - {GEM_CHEST_COST} Gems
+                  </button>
+                </div>
+              </section>
               <div className="shopDrawerFooter">
                 <div className="drawerSection">
                   <p className="shopKicker">Instructions</p>
@@ -4781,15 +5130,24 @@ export function KnightBattleGame() {
                 <strong>S</strong> Heavy Blaster
               </>
             ) : null}
+            {isWeaponUnlocked(stateRef.current.player, "lightsaber_gun") ? (
+              <>
+                {" | "}
+                <strong>R</strong> Lightsaber Gun
+              </>
+            ) : null}
           </p>
           {unlockedAbilityControls.length > 0 ? (
             <p>Unlocked Abilities: {unlockedAbilityControls.join(" | ")}</p>
           ) : (
             <p>Unlocked Abilities: open a chest to unlock ability controls.</p>
           )}
+          {stateRef.current.player.weapon === "lightsaber_gun" ? (
+            <p>Lightsaber Gun Controls: <strong>Q</strong> slash | <strong>W</strong> shoot | <strong>R</strong> equip</p>
+          ) : null}
           {mathError ? <p className="menuError">{mathError}</p> : null}
           <p>
-            Health {Math.ceil(hud.health)} | Gold {hud.goldCoins} | Silver {hud.silverCoins} | Cores {permanentCores} | Kills {hud.kills} | Enemies {hud.enemyCount}
+            Health {Math.ceil(hud.health)} | Gold {hud.goldCoins} | Silver {hud.silverCoins} | Gems {gems} | Cores {permanentCores} | Kills {hud.kills} | Enemies {hud.enemyCount}
             {" | "}
             Regular Troopers {hud.squireCount} | 501st Clone Troopers {hud.archerCount} | Shield Troopers {hud.shieldsmanCount} | Sniper Clones {hud.sniperCount} | Player Shields {hud.shieldBlocks} | Troop Shields {hud.troopShieldBlocks}
           </p>

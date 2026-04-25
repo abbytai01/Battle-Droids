@@ -386,6 +386,15 @@ h1 {
   right: calc(50% + 10px);
 }
 
+.dexPreviewWeaponCard .dexPreviewMuzzle {
+  position: absolute;
+  top: 39px;
+  left: calc(50% + 34px);
+  width: 10px;
+  height: 6px;
+  border-radius: 3px;
+}
+
 .dexPreviewWeapon-lightsaber .dexPreviewBlade {
   background: #8fe6ff;
   box-shadow: 0 0 12px rgba(143, 230, 255, 0.6);
@@ -421,6 +430,23 @@ h1 {
 
 .dexPreviewWeapon-ion_blaster .dexPreviewBlade {
   background: #6effec;
+}
+
+.dexPreviewWeapon-lightsaber_gun .dexPreviewHandle {
+  width: 30px;
+  height: 12px;
+  background: #222b3d;
+}
+
+.dexPreviewWeapon-lightsaber_gun .dexPreviewBlade {
+  left: calc(50% - 40px);
+  width: 26px;
+  background: #8fe6ff;
+  box-shadow: 0 0 12px rgba(143, 230, 255, 0.58);
+}
+
+.dexPreviewWeapon-lightsaber_gun .dexPreviewMuzzle {
+  background: #8bd3ff;
 }
 
 .dexPreviewAbility {
@@ -549,7 +575,7 @@ h1 {
 
 .battleDexButton {
   position: absolute;
-  top: 82px;
+  top: 86px;
   right: 74px;
   z-index: 8;
   border: 3px solid #fff1c1;
@@ -564,9 +590,26 @@ h1 {
   box-shadow: 0 8px 20px rgba(242, 184, 75, 0.28);
 }
 
+.questsButton {
+  position: absolute;
+  top: 44px;
+  right: 74px;
+  z-index: 8;
+  border: 3px solid #fff1c1;
+  border-radius: 999px;
+  padding: 9px 12px;
+  color: #101722;
+  background: linear-gradient(135deg, #ffe7aa, #d66c3f);
+  font: 800 0.78rem "Courier New", monospace;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  cursor: pointer;
+  box-shadow: 0 8px 20px rgba(214, 108, 63, 0.28);
+}
+
 .runSavesButton {
   position: absolute;
-  top: 124px;
+  top: 128px;
   right: 74px;
   z-index: 8;
   border: 3px solid #d7e4ff;
