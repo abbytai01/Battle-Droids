@@ -24,6 +24,7 @@ const CLAIMED_QUESTS_KEY = "battle-droids-claimed-quests";
 const PERMANENT_TROOP_UPGRADES_KEY = "battle-droids-permanent-troop-upgrades";
 const RUN_SAVES_KEY = "battle-droids-run-saves";
 const RUN_SAVES_ENABLED_KEY = "battle-droids-run-saves-enabled";
+const DAILY_REWARDS_KEY = "battle-droids-daily-rewards";
 const MAX_SHIELD_LEVEL = 2;
 const MAX_HEARTS = 20;
 const MAX_BONUS_HEARTS = 8;
@@ -36,6 +37,8 @@ const SHOP_COSTS = {
   archer: 22,
   shieldsman: 18,
   sniper: 32,
+  cloneCommander: 500,
+  medicClone: 500,
   playerShield: 20,
   troopShield: 20,
   food: 6
@@ -58,8 +61,9 @@ const TROOP_NAMES = [
 ];
 const BASE_WEAPONS: WeaponType[] = ["lightsaber", "blaster"];
 const RARE_WEAPONS: WeaponType[] = ["heavy_blaster", "double_lightsaber", "ion_blaster", "lightsaber_gun"];
-const ALL_TROOPS: AllyKind[] = ["squire", "archer", "shieldsman", "sniper"];
-const TROOP_UNLOCK_COSTS: Record<AllyKind, number> = {
+const ALL_TROOPS = ["squire", "archer", "shieldsman", "sniper"] as const;
+type UnlockableTroopKind = (typeof ALL_TROOPS)[number];
+const TROOP_UNLOCK_COSTS: Record<(typeof ALL_TROOPS)[number], number> = {
   squire: 0,
   archer: 35,
   shieldsman: 40,
@@ -78,16 +82,27 @@ const ALL_ABILITIES: AbilityKind[] = [
 const RARE_WEAPON_RUN_COST = 1000;
 const RARE_WEAPON_PERMANENT_COST = 10000;
 const GEM_CHEST_COST = 12;
+const GRAND_GEM_CHEST_COST = 28;
+const SILVER_CHEST_GEM_COST = 4;
+const GOLD_CHEST_GEM_COST = 10;
+const DAILY_CHEST_BUY_LIMIT = 5;
 
 type QuestId =
   | "get_everything"
   | "droid_crusher"
   | "boss_breaker"
   | "treasure_hunter"
-  | "clone_commander";
+  | "clone_commander"
+  | "master_trainer";
 
 type EnemyKind = "scout" | "brute" | "commando" | "droideka" | "sith";
-type AllyKind = "squire" | "archer" | "shieldsman" | "sniper";
+type AllyKind =
+  | "squire"
+  | "archer"
+  | "shieldsman"
+  | "sniper"
+  | "clone_commander"
+  | "medic_clone";
 type ScreenState = "menu" | "playing" | "gameover";
 type AuthView = "welcome" | "signin" | "signup" | "character";
 type MenuView = "main" | "howToPlay" | "permanentShop" | "highScore" | "settings";
@@ -166,6 +181,8 @@ type Ally = {
   rangeLevel: number;
   speedLevel: number;
   permanentId?: string;
+  specialCooldown?: number;
+  weaponMode?: "dual" | "blaster";
 };
 
 type Coin = {
@@ -378,7 +395,51 @@ type QuestDefinition = {
   rewardLabel: string;
 };
 
+type GemChestTier = "basic" | "grand" | "silver" | "gold";
+
+type GemChestReward =
+  | { kind: "weapon"; weapon: WeaponType }
+  | { kind: "abilities"; abilities: AbilityKind[] }
+  | { kind: "silver"; silver: number }
+  | { kind: "gold"; gold: number };
+
+type GemChestOpening = {
+  tier: GemChestTier;
+  tapsLeft: number;
+  reward: GemChestReward;
+};
+
+type DailyRewardKind = "silver" | "gold" | "gems" | "cores";
+type ShopChestKind = "silver" | "gold";
+
+type DailyRewardDefinition = {
+  kind: DailyRewardKind;
+  amount: number;
+  label: string;
+  chestKind?: ShopChestKind;
+};
+
+type DailyRewardsState = {
+  lastRefreshDay: string;
+  pendingCount: number;
+  totalClaims: number;
+  chestResetDay: string;
+  silverChestBuys: number;
+  goldChestBuys: number;
+};
+
 const JEDI_CHARACTERS: JediCharacter[] = ["Obi-Wan", "Anakin", "Mace Windu"];
+const DAILY_REWARD_TRACK: DailyRewardDefinition[] = [
+  { kind: "silver", amount: 120, label: "120 Silver" },
+  { kind: "gems", amount: 5, label: "5 Gems" },
+  { kind: "gold", amount: 18, label: "18 Gold" },
+  { kind: "gems", amount: 0, label: "Free Silver Chest", chestKind: "silver" },
+  { kind: "cores", amount: 2, label: "2 Cores" },
+  { kind: "silver", amount: 260, label: "260 Silver" },
+  { kind: "gems", amount: 8, label: "8 Gems" },
+  { kind: "gems", amount: 0, label: "Free Gold Chest", chestKind: "gold" },
+  { kind: "gold", amount: 30, label: "30 Gold" }
+];
 const QUESTS: QuestDefinition[] = [
   {
     id: "get_everything",
@@ -409,6 +470,12 @@ const QUESTS: QuestDefinition[] = [
     name: "Clone Commander",
     description: "Have 6 troops fighting for you at the same time.",
     rewardLabel: "5 Gems"
+  },
+  {
+    id: "master_trainer",
+    name: "Master Trainer",
+    description: "In one run, max health, range, and speed for every troop type.",
+    rewardLabel: "75 Gold"
   }
 ];
 
@@ -502,10 +569,16 @@ function troopName(id: number) {
 }
 
 function troopLabel(kind: AllyKind) {
+  if (kind === "clone_commander") return "Clone Commander";
+  if (kind === "medic_clone") return "Medic Clone";
   if (kind === "archer") return "501st Clone Trooper";
   if (kind === "shieldsman") return "Shield Trooper";
   if (kind === "sniper") return "Sniper Clone";
   return "Regular Trooper";
+}
+
+function isSpecialHeroTroop(kind: AllyKind) {
+  return kind === "clone_commander" || kind === "medic_clone";
 }
 
 function upgradeCost(ally: Ally, upgrade: "health" | "range" | "speed") {
@@ -535,6 +608,7 @@ function nextRangeUpgradeLevel(currentLevel: number) {
 
 function isTroopUpgradeMaxed(ally: Ally | null, upgrade: "health" | "range" | "speed") {
   if (!ally) return false;
+  if (isSpecialHeroTroop(ally.kind)) return true;
   if (upgrade === "health") return ally.maxHealth >= TROOP_MAX_HP;
   if (upgrade === "range") return ally.rangeLevel >= TROOP_RANGE_MAX_LEVEL;
   return ally.speedLevel >= TROOP_SPEED_MAX_LEVEL;
@@ -542,6 +616,7 @@ function isTroopUpgradeMaxed(ally: Ally | null, upgrade: "health" | "range" | "s
 
 function troopUpgradeLabel(ally: Ally | null, upgrade: "health" | "range" | "speed") {
   if (!ally) return `${TROOP_UPGRADE_COST} Silver`;
+  if (isSpecialHeroTroop(ally.kind)) return "No Upgrades";
   if (isTroopUpgradeMaxed(ally, upgrade)) return "MAX";
   return `${upgradeCost(ally, upgrade)} Silver`;
 }
@@ -573,6 +648,35 @@ function rankLabel(score: number) {
   if (score >= 180) return "Knight";
   if (score >= 80) return "Squire";
   return "Rookie";
+}
+
+function currentLocalDayId() {
+  const now = new Date();
+  const year = now.getFullYear();
+  const month = String(now.getMonth() + 1).padStart(2, "0");
+  const day = String(now.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
+}
+
+function dayIdToUtc(dayId: string) {
+  const [year, month, day] = dayId.split("-").map(Number);
+  return Date.UTC(year, month - 1, day);
+}
+
+function daysBetweenDayIds(previousDay: string, nextDay: string) {
+  return Math.max(0, Math.floor((dayIdToUtc(nextDay) - dayIdToUtc(previousDay)) / 86400000));
+}
+
+function makeDailyRewardsState(): DailyRewardsState {
+  const today = currentLocalDayId();
+  return {
+    lastRefreshDay: today,
+    pendingCount: 1,
+    totalClaims: 0,
+    chestResetDay: today,
+    silverChestBuys: DAILY_CHEST_BUY_LIMIT,
+    goldChestBuys: DAILY_CHEST_BUY_LIMIT
+  };
 }
 
 function toGoldSilver(silverCoins: number) {
@@ -626,6 +730,7 @@ function renderTroopDexPreview(kind: AllyKind) {
       <span className="dexPreviewBody" />
       <span className="dexPreviewWeapon" />
       {kind === "shieldsman" ? <span className="dexPreviewShield" /> : null}
+      {kind === "medic_clone" ? <span className="dexPreviewAura" /> : null}
     </div>
   );
 }
@@ -688,6 +793,59 @@ function chooseRareWeaponChestOptions(lockedWeapons: WeaponType[]) {
   if (roll < 0.85) return [thirdWeapon];
   if (roll < 0.95) return [firstWeapon, secondWeapon];
   return [firstWeapon, secondWeapon, thirdWeapon];
+}
+
+function rollGemChestReward(player: Player, tier: GemChestTier): GemChestReward {
+  if (tier === "silver") {
+    return {
+      kind: "silver",
+      silver: 90 + Math.floor(Math.random() * 121)
+    };
+  }
+
+  if (tier === "gold") {
+    return {
+      kind: "gold",
+      gold: 8 + Math.floor(Math.random() * 9)
+    };
+  }
+
+  const lockedRare = RARE_WEAPONS.filter((weapon) => !isWeaponUnlocked(player, weapon));
+  const roll = Math.random();
+
+  if (roll < (tier === "grand" ? 0.24 : 0.18) && lockedRare.length > 0) {
+    const weapon = lockedRare[Math.floor(Math.random() * lockedRare.length)];
+    return { kind: "weapon", weapon };
+  }
+
+  if (roll < (tier === "grand" ? 0.56 : 0.45)) {
+    const abilityCount =
+      tier === "grand"
+        ? 3 + Math.floor(Math.random() * 2)
+        : 2 + Math.floor(Math.random() * 2);
+    return {
+      kind: "abilities",
+      abilities: [...ALL_ABILITIES].sort(() => Math.random() - 0.5).slice(0, abilityCount)
+    };
+  }
+
+  if (roll < (tier === "grand" ? 0.82 : 0.75)) {
+    return {
+      kind: "silver",
+      silver:
+        tier === "grand"
+          ? 420 + Math.floor(Math.random() * 381)
+          : 180 + Math.floor(Math.random() * 221)
+    };
+  }
+
+  return {
+    kind: "gold",
+    gold:
+      tier === "grand"
+        ? 28 + Math.floor(Math.random() * 21)
+        : 12 + Math.floor(Math.random() * 14)
+  };
 }
 
 function applyCharacterPerks(player: Player, character: JediCharacter | "") {
@@ -1300,6 +1458,60 @@ function holdShieldBubble(state: GameState) {
   player.shieldBubbleTimer = 0.18;
 }
 
+function useSpecialTroopAbility(state: GameState, ally: Ally, target: Enemy | null) {
+  const player = state.player;
+  if (ally.specialCooldown && ally.specialCooldown > 0) return false;
+
+  const centerX = ally.x + ally.w / 2;
+  const targetY = ally.y + 22;
+
+  if (ally.kind === "medic_clone") {
+    const woundedTroops = state.allies.filter(
+      (candidate) => candidate.id !== ally.id && candidate.health < candidate.maxHealth
+    );
+    if (woundedTroops.length > 0) {
+      for (const candidate of woundedTroops) {
+        if (Math.abs(candidate.x - ally.x) <= 220) {
+          const heal = Math.max(1, Math.ceil(candidate.maxHealth * 0.25));
+          candidate.health = Math.min(candidate.maxHealth, candidate.health + heal);
+          spawnParticleBurst(state, candidate.x + candidate.w / 2, candidate.y + 18, 8, "#79f2a6");
+        }
+      }
+      ally.specialCooldown = 5;
+      spawnParticleBurst(state, centerX, targetY, 10, "#79f2a6");
+      return true;
+    }
+  }
+
+  if (
+    player.fireballLevel > 0 &&
+    target &&
+    Math.abs(target.x - ally.x) <= WIDTH / 2
+  ) {
+    const direction = target.x >= ally.x ? 1 : -1;
+    state.projectiles.push({
+      id: state.nextProjectileId++,
+      kind: "fireball",
+      x: centerX + direction * 18,
+      y: ally.y + 28,
+      w: 22,
+      h: 16,
+      vx: direction * (340 + player.fireballLevel * 18),
+      startX: centerX,
+      maxDistance: WIDTH / 2,
+      damage: ally.kind === "clone_commander" ? 2 + player.fireballLevel : 1 + player.fireballLevel,
+      life: 1.5,
+      hitIds: [],
+      chestHitIds: []
+    });
+    ally.specialCooldown = ally.kind === "clone_commander" ? 4.2 : 5.2;
+    spawnParticleBurst(state, centerX + direction * 16, ally.y + 24, 8, "#ff9b3d");
+    return true;
+  }
+
+  return false;
+}
+
 function addAlly(state: GameState, kind: AllyKind) {
   const id = state.nextAllyId++;
   const base = {
@@ -1318,10 +1530,42 @@ function addAlly(state: GameState, kind: AllyKind) {
     hitsTaken: 0,
     healthLevel: 0,
     rangeLevel: 0,
-    speedLevel: 0
+    speedLevel: 0,
+    specialCooldown: 0,
+    weaponMode: "dual" as "dual" | "blaster"
   };
   const ally: Ally =
-    kind === "archer"
+    kind === "clone_commander"
+      ? {
+          ...base,
+          y: FLOOR_Y - 62,
+          w: 28,
+          h: 62,
+          speed: 108,
+          health: 8,
+          maxHealth: 8,
+          damage: 3,
+          attackRange: 180,
+          attackCooldown: 0.75,
+          color: "#6db4ff",
+          cost: SHOP_COSTS.cloneCommander
+        }
+      : kind === "medic_clone"
+        ? {
+            ...base,
+            y: FLOOR_Y - 62,
+            w: 28,
+            h: 62,
+            speed: 104,
+            health: 8,
+            maxHealth: 8,
+            damage: 2,
+            attackRange: 175,
+            attackCooldown: 0.82,
+            color: "#86d3c9",
+            cost: SHOP_COSTS.medicClone
+          }
+      : kind === "archer"
       ? {
           ...base,
           y: FLOOR_Y - 58,
@@ -1813,7 +2057,17 @@ function drawAlly(
   const x = Math.round(ally.x);
   const y = Math.round(ally.y);
   const marking =
-    ally.kind === "sniper" ? "#101827" : ally.kind === "archer" ? "#2f6fd6" : ally.kind === "shieldsman" ? "#6f7d99" : "#e9edf5";
+    ally.kind === "clone_commander"
+      ? "#3d7de0"
+      : ally.kind === "medic_clone"
+        ? "#4fb89d"
+        : ally.kind === "sniper"
+          ? "#101827"
+          : ally.kind === "archer"
+            ? "#2f6fd6"
+            : ally.kind === "shieldsman"
+              ? "#6f7d99"
+              : "#e9edf5";
 
   if (shieldBubbleActive) {
     drawEnergyBubble(ctx, x + ally.w / 2, y + ally.h / 2, Math.max(32, ally.h / 2 + 4), 0.85);
@@ -1847,9 +2101,29 @@ function drawAlly(
 
   const blasterX = ally.facing === 1 ? x + ally.w - 2 : x - 18;
   ctx.fillStyle = "#1d2636";
-  ctx.fillRect(blasterX, y + 26, 20, 6);
-  ctx.fillStyle = "#7f8da6";
-  ctx.fillRect(ally.facing === 1 ? blasterX + 16 : blasterX - 6, y + 27, 8, 3);
+  if (ally.kind === "clone_commander" || ally.kind === "medic_clone") {
+    if (ally.weaponMode === "blaster") {
+      ctx.fillRect(blasterX - 2, y + 25, 24, 7);
+      ctx.fillStyle = ally.kind === "medic_clone" ? "#8de7d0" : "#8fc8ff";
+      ctx.fillRect(ally.facing === 1 ? blasterX + 18 : blasterX - 6, y + 27, 8, 3);
+    } else {
+      ctx.fillRect(blasterX - 1, y + 22, 10, 5);
+      ctx.fillRect(blasterX + 8, y + 30, 10, 5);
+      ctx.fillStyle = ally.kind === "medic_clone" ? "#8de7d0" : "#8fc8ff";
+      ctx.fillRect(ally.facing === 1 ? blasterX + 7 : blasterX - 5, y + 23, 4, 2);
+      ctx.fillRect(ally.facing === 1 ? blasterX + 16 : blasterX + 4, y + 31, 4, 2);
+    }
+  } else {
+    ctx.fillRect(blasterX, y + 26, 20, 6);
+    ctx.fillStyle = "#7f8da6";
+    ctx.fillRect(ally.facing === 1 ? blasterX + 16 : blasterX - 6, y + 27, 8, 3);
+  }
+
+  if (ally.kind === "medic_clone") {
+    ctx.fillStyle = "#dffff4";
+    ctx.fillRect(x + ally.w / 2 - 2, y + 24, 4, 12);
+    ctx.fillRect(x + ally.w / 2 - 6, y + 28, 12, 4);
+  }
 
   if (!shieldBubbleActive && ally.guarding) {
     drawHeldShield(ctx, x - 2, y - 2, ally.shieldPattern ? MAX_SHIELD_LEVEL : 1, ally.facing);
@@ -2062,7 +2336,7 @@ function writeCharacter(username: string, character: JediCharacter) {
   window.localStorage.setItem(userStorageKey(CHARACTER_KEY, username), character);
 }
 
-function readUnlockedTroops(username: string): AllyKind[] {
+function readUnlockedTroops(username: string): UnlockableTroopKind[] {
   if (typeof window === "undefined") return ["squire"];
 
   try {
@@ -2070,18 +2344,20 @@ function readUnlockedTroops(username: string): AllyKind[] {
     if (!raw) return ["squire"];
     const parsed = JSON.parse(raw) as AllyKind[];
     if (!Array.isArray(parsed)) return ["squire"];
-    const validTroops = parsed.filter((kind): kind is AllyKind => ALL_TROOPS.includes(kind));
-    return Array.from(new Set<AllyKind>(["squire", ...validTroops]));
+    const validTroops = parsed.filter(
+      (kind): kind is UnlockableTroopKind => ALL_TROOPS.includes(kind as UnlockableTroopKind)
+    );
+    return Array.from(new Set<UnlockableTroopKind>(["squire", ...validTroops]));
   } catch {
     return ["squire"];
   }
 }
 
-function writeUnlockedTroops(username: string, troops: AllyKind[]) {
+function writeUnlockedTroops(username: string, troops: UnlockableTroopKind[]) {
   if (typeof window === "undefined") return;
   window.localStorage.setItem(
     userStorageKey(DEX_TROOPS_KEY, username),
-    JSON.stringify(Array.from(new Set<AllyKind>(["squire", ...troops])))
+    JSON.stringify(Array.from(new Set<UnlockableTroopKind>(["squire", ...troops])))
   );
 }
 
@@ -2213,6 +2489,69 @@ function writeRunSavesEnabled(username: string, enabled: boolean) {
   window.localStorage.setItem(userStorageKey(RUN_SAVES_ENABLED_KEY, username), String(enabled));
 }
 
+function readDailyRewardsState(username: string): DailyRewardsState {
+  if (typeof window === "undefined") return makeDailyRewardsState();
+
+  try {
+    const raw = window.localStorage.getItem(userStorageKey(DAILY_REWARDS_KEY, username));
+    if (!raw) return makeDailyRewardsState();
+    const parsed = JSON.parse(raw) as Partial<DailyRewardsState>;
+    const fallback = makeDailyRewardsState();
+    return {
+      lastRefreshDay:
+        typeof parsed.lastRefreshDay === "string" && parsed.lastRefreshDay.length > 0
+          ? parsed.lastRefreshDay
+          : fallback.lastRefreshDay,
+      pendingCount:
+        typeof parsed.pendingCount === "number" && Number.isFinite(parsed.pendingCount)
+          ? Math.max(0, Math.floor(parsed.pendingCount))
+          : fallback.pendingCount,
+      totalClaims:
+        typeof parsed.totalClaims === "number" && Number.isFinite(parsed.totalClaims)
+          ? Math.max(0, Math.floor(parsed.totalClaims))
+          : fallback.totalClaims,
+      chestResetDay:
+        typeof parsed.chestResetDay === "string" && parsed.chestResetDay.length > 0
+          ? parsed.chestResetDay
+          : fallback.chestResetDay,
+      silverChestBuys:
+        typeof parsed.silverChestBuys === "number" && Number.isFinite(parsed.silverChestBuys)
+          ? Math.max(0, Math.floor(parsed.silverChestBuys))
+          : fallback.silverChestBuys,
+      goldChestBuys:
+        typeof parsed.goldChestBuys === "number" && Number.isFinite(parsed.goldChestBuys)
+          ? Math.max(0, Math.floor(parsed.goldChestBuys))
+          : fallback.goldChestBuys
+    };
+  } catch {
+    return makeDailyRewardsState();
+  }
+}
+
+function writeDailyRewardsState(username: string, rewards: DailyRewardsState) {
+  if (typeof window === "undefined") return;
+  window.localStorage.setItem(
+    userStorageKey(DAILY_REWARDS_KEY, username),
+    JSON.stringify(rewards)
+  );
+}
+
+function syncDailyRewardsState(rewards: DailyRewardsState) {
+  const today = currentLocalDayId();
+  const missedDays = daysBetweenDayIds(rewards.lastRefreshDay, today);
+  const shouldResetChests = rewards.chestResetDay !== today;
+  if (missedDays === 0 && !shouldResetChests) return rewards;
+  const chestDaysMissed = shouldResetChests ? Math.max(1, daysBetweenDayIds(rewards.chestResetDay, today)) : 0;
+  return {
+    ...rewards,
+    lastRefreshDay: missedDays > 0 ? today : rewards.lastRefreshDay,
+    pendingCount: rewards.pendingCount + missedDays,
+    chestResetDay: today,
+    silverChestBuys: rewards.silverChestBuys + chestDaysMissed * DAILY_CHEST_BUY_LIMIT,
+    goldChestBuys: rewards.goldChestBuys + chestDaysMissed * DAILY_CHEST_BUY_LIMIT
+  };
+}
+
 export function KnightBattleGame() {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const stateRef = useRef<GameState>(makeInitialState());
@@ -2251,14 +2590,17 @@ export function KnightBattleGame() {
   const [shopDrawerOpen, setShopDrawerOpen] = useState(false);
   const [battleDexOpen, setBattleDexOpen] = useState(false);
   const [questsOpen, setQuestsOpen] = useState(false);
+  const [rewardsOpen, setRewardsOpen] = useState(false);
   const [runSavesOpen, setRunSavesOpen] = useState(false);
-  const [unlockedTroops, setUnlockedTroops] = useState<AllyKind[]>(["squire"]);
+  const [unlockedTroops, setUnlockedTroops] = useState<UnlockableTroopKind[]>(["squire"]);
   const [unlockedRareWeapons, setUnlockedRareWeapons] = useState<WeaponType[]>([]);
   const [discoveredAbilities, setDiscoveredAbilities] = useState<AbilityKind[]>([]);
   const [gems, setGems] = useState(0);
   const [claimedQuests, setClaimedQuests] = useState<QuestId[]>([]);
+  const [dailyRewards, setDailyRewards] = useState<DailyRewardsState>(makeDailyRewardsState());
   const [questMessage, setQuestMessage] = useState("");
   const [shopChestMessage, setShopChestMessage] = useState("");
+  const [gemChestOpening, setGemChestOpening] = useState<GemChestOpening | null>(null);
   const [soundEffectsOn, setSoundEffectsOn] = useState(true);
   const [heartbeatOn, setHeartbeatOn] = useState(true);
   const [showAttackRange, setShowAttackRange] = useState(true);
@@ -2364,7 +2706,16 @@ export function KnightBattleGame() {
     if (questId === "droid_crusher") return state.player.kills >= 100;
     if (questId === "boss_breaker") return state.bossesDefeated >= 1;
     if (questId === "treasure_hunter") return state.chestsOpened >= 5;
-    return state.allies.length >= 6;
+    if (questId === "clone_commander") return state.allies.length >= 6;
+    return ALL_TROOPS.every((kind) =>
+      state.allies.some(
+        (ally) =>
+          ally.kind === kind &&
+          ally.maxHealth >= TROOP_MAX_HP &&
+          ally.rangeLevel >= TROOP_RANGE_MAX_LEVEL &&
+          ally.speedLevel >= TROOP_SPEED_MAX_LEVEL
+      )
+    );
   };
 
   const claimQuestReward = (questId: QuestId) => {
@@ -2380,39 +2731,114 @@ export function KnightBattleGame() {
       setHud(makeHud(stateRef.current));
       return;
     }
+    if (questId === "master_trainer") {
+      const nextSilver = stateRef.current.player.silverCoins + 750;
+      stateRef.current.player.silverCoins = nextSilver;
+      writeCurrentCoinBalance(nextSilver);
+      setQuestMessage("Quest complete: Master Trainer! Reward: 75 Gold.");
+      setHud(makeHud(stateRef.current));
+      return;
+    }
     const gemReward =
       questId === "boss_breaker" ? 12 : questId === "droid_crusher" ? 8 : questId === "treasure_hunter" ? 6 : 5;
     writeCurrentGems(gems + gemReward);
     setQuestMessage(`Quest complete! Reward: ${gemReward} Gems.`);
   };
 
-  const openGemChest = () => {
-    if (gems < GEM_CHEST_COST) return;
+  const applyGemChestReward = (reward: GemChestReward, tier: GemChestTier) => {
     const state = stateRef.current;
-    writeCurrentGems(gems - GEM_CHEST_COST);
-    const roll = Math.random();
-    if (roll < 0.18) {
-      const lockedRare = RARE_WEAPONS.filter((weapon) => !isWeaponUnlocked(state.player, weapon));
-      if (lockedRare.length > 0) {
-        const weapon = lockedRare[Math.floor(Math.random() * lockedRare.length)];
-        persistWeaponUnlock(weapon);
-        setShopChestMessage(`Gem Chest reward: ${weaponLabel(weapon)}!`);
-        setHud(makeHud(state));
-        return;
+    const chestLabel =
+      tier === "grand"
+        ? "Grand Gem Chest"
+        : tier === "silver"
+          ? "Silver Chest"
+          : tier === "gold"
+            ? "Gold Chest"
+            : "Gem Chest";
+
+    if (reward.kind === "weapon") {
+      persistWeaponUnlock(reward.weapon);
+      setShopChestMessage(`${chestLabel} reward: ${weaponLabel(reward.weapon)}!`);
+      setHud(makeHud(state));
+      return;
+    }
+
+    if (reward.kind === "abilities") {
+      for (const ability of reward.abilities) {
+        applyAbility(state, ability);
+        persistAbilityDiscovery(ability);
       }
+      setShopChestMessage(
+        `${chestLabel} reward: ${reward.abilities.map((ability) => abilityLabel(ability)).join(", ")}.`
+      );
+      setHud(makeHud(state));
+      return;
     }
-    if (roll < 0.55) {
-      const silverReward = 40 + Math.floor(Math.random() * 81);
-      state.player.silverCoins += silverReward;
+
+    if (reward.kind === "silver") {
+      state.player.silverCoins += reward.silver;
       writeCurrentCoinBalance(state.player.silverCoins);
-      setShopChestMessage(`Gem Chest reward: ${silverReward} Silver.`);
-    } else {
-      const goldReward = 2 + Math.floor(Math.random() * 7);
-      state.player.silverCoins += goldReward * 10;
-      writeCurrentCoinBalance(state.player.silverCoins);
-      setShopChestMessage(`Gem Chest reward: ${goldReward} Gold.`);
+      setShopChestMessage(`${chestLabel} reward: ${reward.silver} Silver.`);
+      setHud(makeHud(state));
+      return;
     }
+
+    state.player.silverCoins += reward.gold * 10;
+    writeCurrentCoinBalance(state.player.silverCoins);
+    setShopChestMessage(`${chestLabel} reward: ${reward.gold} Gold.`);
     setHud(makeHud(state));
+  };
+
+  const tapGemChest = () => {
+    if (!gemChestOpening) return;
+    if (gemChestOpening.tapsLeft > 1) {
+      setGemChestOpening({
+        ...gemChestOpening,
+        tapsLeft: gemChestOpening.tapsLeft - 1
+      });
+      return;
+    }
+
+    applyGemChestReward(gemChestOpening.reward, gemChestOpening.tier);
+    setGemChestOpening(null);
+  };
+
+  const startChestOpening = (tier: GemChestTier) => {
+    setGemChestOpening({
+      tier,
+      tapsLeft: 5,
+      reward: rollGemChestReward(stateRef.current.player, tier)
+    });
+  };
+
+  const openGemChest = (tier: GemChestTier = "basic") => {
+    const chestCost = tier === "grand" ? GRAND_GEM_CHEST_COST : GEM_CHEST_COST;
+    if (gems < chestCost || gemChestOpening) return;
+    writeCurrentGems(gems - chestCost);
+    startChestOpening(tier);
+  };
+
+  const buyCoinChest = (kind: ShopChestKind) => {
+    const syncedRewards = syncCurrentDailyRewards();
+    if (gemChestOpening) return;
+    if (kind === "silver") {
+      if (gems < SILVER_CHEST_GEM_COST || syncedRewards.silverChestBuys <= 0) return;
+      writeCurrentGems(gems - SILVER_CHEST_GEM_COST);
+      writeCurrentDailyRewards({
+        ...syncedRewards,
+        silverChestBuys: syncedRewards.silverChestBuys - 1
+      });
+      startChestOpening("silver");
+      return;
+    }
+
+    if (gems < GOLD_CHEST_GEM_COST || syncedRewards.goldChestBuys <= 0) return;
+    writeCurrentGems(gems - GOLD_CHEST_GEM_COST);
+    writeCurrentDailyRewards({
+      ...syncedRewards,
+      goldChestBuys: syncedRewards.goldChestBuys - 1
+    });
+    startChestOpening("gold");
   };
 
   const writeCurrentCoinBalance = (silverCoins: number) => {
@@ -2422,6 +2848,52 @@ export function KnightBattleGame() {
   const writeCurrentGems = (nextGems: number) => {
     setGems(nextGems);
     writeGems(playerName || "Pilot", nextGems);
+  };
+
+  const writeCurrentDailyRewards = (nextRewards: DailyRewardsState) => {
+    setDailyRewards(nextRewards);
+    writeDailyRewardsState(playerName || "Pilot", nextRewards);
+  };
+
+  const syncCurrentDailyRewards = () => {
+    const nextRewards = syncDailyRewardsState(
+      readDailyRewardsState(playerName || "Pilot")
+    );
+    writeCurrentDailyRewards(nextRewards);
+    return nextRewards;
+  };
+
+  const claimDailyReward = () => {
+    const nextRewards = syncCurrentDailyRewards();
+    if (nextRewards.pendingCount <= 0) return;
+
+    const reward = DAILY_REWARD_TRACK[nextRewards.totalClaims % DAILY_REWARD_TRACK.length];
+    const state = stateRef.current;
+
+    if (reward.chestKind) {
+      startChestOpening(reward.chestKind);
+    } else if (reward.kind === "silver") {
+      state.player.silverCoins += reward.amount;
+      writeCurrentCoinBalance(state.player.silverCoins);
+    } else if (reward.kind === "gold") {
+      state.player.silverCoins += reward.amount * 10;
+      writeCurrentCoinBalance(state.player.silverCoins);
+    } else if (reward.kind === "gems") {
+      writeCurrentGems(gems + reward.amount);
+    } else {
+      const nextCores = permanentCores + reward.amount;
+      setPermanentCores(nextCores);
+      writePermanentCores(playerName || "Pilot", nextCores);
+    }
+
+    const updatedRewards = {
+      ...nextRewards,
+      pendingCount: nextRewards.pendingCount - 1,
+      totalClaims: nextRewards.totalClaims + 1
+    };
+    writeCurrentDailyRewards(updatedRewards);
+    setQuestMessage(`Daily reward claimed: ${reward.label}.`);
+    setHud({ ...makeHud(state), cores: reward.kind === "cores" ? permanentCores + reward.amount : permanentCores });
   };
 
   const playSound = (kind: "hit" | "shoot" | "block") => {
@@ -2531,6 +3003,7 @@ export function KnightBattleGame() {
     const savedAbilities = readDiscoveredAbilities(username);
     const savedGems = readGems(username);
     const savedClaimedQuests = readClaimedQuests(username);
+    const savedDailyRewards = syncDailyRewardsState(readDailyRewardsState(username));
     const savedRunSaves = readRunSaves(username);
     const savedRunSavesEnabled = readRunSavesEnabled(username);
     stateRef.current.player.silverCoins = savedCoins;
@@ -2545,8 +3018,10 @@ export function KnightBattleGame() {
     setDiscoveredAbilities(savedAbilities);
     setGems(savedGems);
     setClaimedQuests(savedClaimedQuests);
+    setDailyRewards(savedDailyRewards);
     setRunSaves(savedRunSaves);
     setRunSavesEnabled(savedRunSavesEnabled);
+    writeDailyRewardsState(username, savedDailyRewards);
     setSlotDraftNames(
       Object.fromEntries(savedRunSaves.map((save) => [save.slot, save.label]))
     );
@@ -2554,6 +3029,7 @@ export function KnightBattleGame() {
     setRunSaveMessage("");
     setQuestMessage("");
     setShopChestMessage("");
+    setRewardsOpen(false);
     setHud({ ...makeHudState(stateRef.current), cores: savedCores });
   };
 
@@ -2612,6 +3088,7 @@ export function KnightBattleGame() {
     setMathAnswer("");
     setMathError("");
     setQuestsOpen(false);
+    setRewardsOpen(false);
     setQuestMessage("");
     setShopChestMessage("");
     setRunSavesOpen(false);
@@ -2650,8 +3127,10 @@ export function KnightBattleGame() {
     setDiscoveredAbilities([]);
     setGems(0);
     setClaimedQuests([]);
+    setDailyRewards(makeDailyRewardsState());
     setQuestMessage("");
     setShopChestMessage("");
+    setRewardsOpen(false);
     setRunSaves([]);
     setSlotDraftNames({});
     setCurrentRunSaveSlot(null);
@@ -2733,6 +3212,17 @@ export function KnightBattleGame() {
   }, []);
 
   useEffect(() => {
+    if (!isSignedIn || !playerName.trim()) return;
+
+    syncCurrentDailyRewards();
+    const interval = window.setInterval(() => {
+      syncCurrentDailyRewards();
+    }, 60000);
+
+    return () => window.clearInterval(interval);
+  }, [isSignedIn, playerName]);
+
+  useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
       const target = event.target;
       if (
@@ -2801,7 +3291,7 @@ export function KnightBattleGame() {
         return;
       }
 
-      if (screen === "playing" && !paused && !abilityChoices && !rareWeaponReward && !rareWeaponChoices && !mathChallenge) {
+      if (screen === "playing" && !paused && !abilityChoices && !rareWeaponReward && !rareWeaponChoices && !mathChallenge && !gemChestOpening && !rewardsOpen) {
         if (key.toLowerCase() === "a") {
           stateRef.current.player.weapon = "blaster";
           setHud(makeHudState(stateRef.current));
@@ -2927,7 +3417,7 @@ export function KnightBattleGame() {
       window.removeEventListener("keydown", onKeyDown);
       window.removeEventListener("keyup", onKeyUp);
     };
-  }, [abilityChoices, isSignedIn, mathChallenge, password, paused, playerName, rareWeaponChoices, rareWeaponReward, screen, troopUpgradeOpen]);
+  }, [abilityChoices, gemChestOpening, isSignedIn, mathChallenge, password, paused, playerName, rareWeaponChoices, rareWeaponReward, rewardsOpen, screen, troopUpgradeOpen]);
 
   useEffect(() => {
     if (
@@ -2936,9 +3426,11 @@ export function KnightBattleGame() {
       screen !== "playing" ||
       paused ||
       abilityChoices ||
+      rewardsOpen ||
       rareWeaponReward ||
       rareWeaponChoices ||
-      mathChallenge
+      mathChallenge ||
+      gemChestOpening
     ) {
       return;
     }
@@ -2951,10 +3443,12 @@ export function KnightBattleGame() {
   }, [
     abilityChoices,
     currentRunSaveSlot,
+    gemChestOpening,
     mathChallenge,
     paused,
     rareWeaponChoices,
     rareWeaponReward,
+    rewardsOpen,
     runSavesEnabled,
     screen,
     runSaves
@@ -2978,7 +3472,7 @@ export function KnightBattleGame() {
       const dt = Math.min((now - lastTime) / 1000, 0.033);
       lastTime = now;
 
-      if (screen === "playing" && !paused && !abilityChoices && !rareWeaponReward && !rareWeaponChoices && !mathChallenge) {
+      if (screen === "playing" && !paused && !abilityChoices && !rareWeaponReward && !rareWeaponChoices && !mathChallenge && !gemChestOpening && !rewardsOpen) {
         if (!state.bossActive) {
           state.elapsed += dt;
         }
@@ -3343,9 +3837,13 @@ export function KnightBattleGame() {
         for (const ally of state.allies) {
           ally.attackTimer = Math.max(0, ally.attackTimer - dt);
           ally.attackWindup = Math.max(0, ally.attackWindup - dt);
+          ally.specialCooldown = Math.max(0, (ally.specialCooldown ?? 0) - dt);
 
           const targetPool =
-            ally.kind === "archer" || ally.kind === "sniper"
+            ally.kind === "archer" ||
+            ally.kind === "sniper" ||
+            ally.kind === "clone_commander" ||
+            ally.kind === "medic_clone"
               ? state.enemies.filter(canRangedTarget)
               : state.enemies;
           let target =
@@ -3355,6 +3853,10 @@ export function KnightBattleGame() {
               .sort((a, b) => strongestEnemySort(a, b) || Math.abs(a.x - ally.x) - Math.abs(b.x - ally.x))[0];
 
           ally.targetId = target?.id ?? null;
+
+          if (isSpecialHeroTroop(ally.kind) && useSpecialTroopAbility(state, ally, target ?? null)) {
+            continue;
+          }
 
           if (!target) {
             const followX = clamp(state.player.x - 60 + ally.id * 18, 60, WIDTH - 120);
@@ -3405,18 +3907,39 @@ export function KnightBattleGame() {
             if (absDistanceX > ally.attackRange) {
               ally.x += Math.sign(distanceX) * ally.speed * dt;
             } else {
-              ally.attackWindup = ally.kind === "archer" || ally.kind === "sniper" ? 0.28 : 0.18;
+              ally.attackWindup =
+                ally.kind === "archer" ||
+                ally.kind === "sniper" ||
+                ally.kind === "clone_commander" ||
+                ally.kind === "medic_clone"
+                  ? 0.28
+                  : 0.18;
               ally.attackTimer = ally.attackCooldown;
             }
           }
 
           if (ally.attackWindup > 0 && ally.attackWindup < 0.08) {
-            if (ally.kind === "archer" || ally.kind === "sniper") {
+            if (
+              ally.kind === "archer" ||
+              ally.kind === "sniper" ||
+              ally.kind === "clone_commander" ||
+              ally.kind === "medic_clone"
+            ) {
+              ally.weaponMode =
+                ally.kind === "clone_commander" || ally.kind === "medic_clone"
+                  ? Math.abs(target.x - ally.x) > 130
+                    ? "blaster"
+                    : "dual"
+                  : ally.weaponMode;
               playSound("shoot");
               damageEnemy(
                 state,
                 target,
-                ally.damage,
+                ally.kind === "clone_commander"
+                  ? ally.weaponMode === "blaster"
+                    ? ally.damage + 1
+                    : ally.damage
+                  : ally.damage,
                 target.x + target.w / 2,
                 target.y + 12,
                 "ranged"
@@ -3426,7 +3949,13 @@ export function KnightBattleGame() {
                 target.x + target.w / 2,
                 target.y + 12,
                 ally.kind === "sniper" ? 7 : 4,
-                ally.kind === "sniper" ? "#d7e8ff" : "#5ab4ff"
+                ally.kind === "medic_clone"
+                  ? "#79f2a6"
+                  : ally.kind === "clone_commander"
+                    ? "#8bd3ff"
+                    : ally.kind === "sniper"
+                      ? "#d7e8ff"
+                      : "#5ab4ff"
               );
             } else if (
               absDistanceX <= ally.attackRange + 8 &&
@@ -3666,13 +4195,26 @@ export function KnightBattleGame() {
         ctx.fillRect(Math.round(chest.x) - 2, Math.round(chest.y) - 14, 4, 24);
 
         const panelX = Math.round(clamp(chest.x + 28, 20, WIDTH - 260));
-        const panelY = Math.round(clamp(chest.y - 96, 176, FLOOR_Y - 110));
+        const panelY = Math.round(clamp(chest.y - 132, 140, FLOOR_Y - 146));
         const weaponHitsLeft = chestHitsLeftForWeapon(chest, state.player.weapon);
+        const abilityChestGroups: AbilityKind[][] = [
+          ["fireball", "spike_trap", "dash_strike", "heal_pulse"],
+          ["freeze_blast", "turret_droid", "shield_bubble", "coin_magnet"]
+        ];
+        const abilityChestLines = abilityChestGroups.map((line) =>
+          line
+            .map((ability) => {
+              const unlocked =
+                abilityLevel(state.player, ability) > 0 || discoveredAbilities.includes(ability);
+              return `${abilityLabel(ability)} ${unlocked ? "Unlocked" : "Not unlocked"}`;
+            })
+            .join(" | ")
+        );
         ctx.fillStyle = "rgba(17, 24, 39, 0.88)";
-        ctx.fillRect(panelX, panelY, 238, 90);
+        ctx.fillRect(panelX, panelY, 238, 126);
         ctx.strokeStyle = "#e2b76a";
         ctx.lineWidth = 3;
-        ctx.strokeRect(panelX, panelY, 238, 90);
+        ctx.strokeRect(panelX, panelY, 238, 126);
         ctx.fillStyle = "#fff1c1";
         ctx.font = 'bold 16px "Courier New", monospace';
         ctx.fillText("CHEST", panelX + 12, panelY + 22);
@@ -3700,6 +4242,11 @@ export function KnightBattleGame() {
         if (chestRuleLineTwo) {
           ctx.fillText(chestRuleLineTwo, panelX + 12, panelY + 78);
         }
+        ctx.fillStyle = "#fff1c1";
+        ctx.fillText("Abilities", panelX + 12, panelY + 96);
+        ctx.fillStyle = "#f4f7fb";
+        ctx.fillText(abilityChestLines[0], panelX + 12, panelY + 112);
+        ctx.fillText(abilityChestLines[1], panelX + 12, panelY + 128);
       }
 
       for (const trap of state.spikeTraps) {
@@ -3914,13 +4461,13 @@ export function KnightBattleGame() {
     setRunSaveMessage(`Deleted slot ${slot + 1}.`);
   };
 
-  const isTroopUnlocked = (kind: AllyKind) => unlockedTroops.includes(kind);
+  const isTroopUnlocked = (kind: UnlockableTroopKind) => unlockedTroops.includes(kind);
 
-  const unlockTroopType = (kind: AllyKind) => {
+  const unlockTroopType = (kind: UnlockableTroopKind) => {
     const state = stateRef.current;
     const cost = TROOP_UNLOCK_COSTS[kind];
     if (isTroopUnlocked(kind) || state.player.silverCoins < cost) return;
-    const nextTroops = Array.from(new Set<AllyKind>([...unlockedTroops, kind]));
+    const nextTroops = Array.from(new Set<UnlockableTroopKind>([...unlockedTroops, kind]));
     state.player.silverCoins -= cost;
     writeCurrentCoinBalance(state.player.silverCoins);
     setUnlockedTroops(nextTroops);
@@ -3937,11 +4484,23 @@ export function KnightBattleGame() {
     setBattleDexOpen(false);
   };
 
-  const buyTroop = (kind: AllyKind, cost: number) => {
+  const buyTroop = (kind: UnlockableTroopKind, cost: number) => {
     const state = stateRef.current;
     if (screen !== "playing" || !isTroopUnlocked(kind) || state.player.silverCoins < cost) {
       return;
     }
+
+    state.player.silverCoins -= cost;
+    writeCurrentCoinBalance(state.player.silverCoins);
+    addAlly(state, kind);
+    setSelectedTroopIndex(state.allies.length - 1);
+    setHud(makeHud(state));
+  };
+
+  const buySpecialTroop = (kind: "clone_commander" | "medic_clone", cost: number) => {
+    const state = stateRef.current;
+    if (screen !== "playing" || state.player.silverCoins < cost) return;
+    if (state.allies.some((ally) => ally.kind === kind)) return;
 
     state.player.silverCoins -= cost;
     writeCurrentCoinBalance(state.player.silverCoins);
@@ -4106,6 +4665,10 @@ export function KnightBattleGame() {
   const heroLabel = selectedCharacter
     ? `${selectedCharacter} (${playerName || "Pilot"})`
     : playerName || "---";
+  const pendingDailyRewards = dailyRewards.pendingCount;
+  const nextDailyReward = DAILY_REWARD_TRACK[dailyRewards.totalClaims % DAILY_REWARD_TRACK.length];
+  const silverChestUsesAvailable = dailyRewards.silverChestBuys;
+  const goldChestUsesAvailable = dailyRewards.goldChestBuys;
 
   return (
     <main className="battlePage">
@@ -4114,6 +4677,7 @@ export function KnightBattleGame() {
           <div>
             <p className="kicker">Pixel Arena</p>
             <h1>Battle Droids</h1>
+            <p className="intro">Created by Cluper2320</p>
             <p className="intro">
               Survive longer waves, hire help in the shop, and chase the top
               score with your own named hero.
@@ -4383,12 +4947,14 @@ export function KnightBattleGame() {
                       writeUnlockedWeapons(username, []);
                       writeDiscoveredAbilities(username, []);
                       writeClaimedQuests(username, []);
+                      writeDailyRewardsState(username, makeDailyRewardsState());
                       setSelectedCharacter("");
                       setUnlockedTroops(["squire"]);
                       setUnlockedRareWeapons([]);
                       setDiscoveredAbilities([]);
                       setGems(0);
                       setClaimedQuests([]);
+                      setDailyRewards(makeDailyRewardsState());
                       stateRef.current.player.silverCoins = 0;
                       setHud({ ...makeHudState(stateRef.current), cores: 0 });
                       setIsSignedIn(true);
@@ -4424,6 +4990,19 @@ export function KnightBattleGame() {
           />
           {isSignedIn ? (
             <>
+              <button
+                className="rewardsButton"
+                type="button"
+                onClick={() => {
+                  syncCurrentDailyRewards();
+                  setRewardsOpen(true);
+                }}
+              >
+                Rewards
+                {pendingDailyRewards > 0 ? (
+                  <span className="buttonBadge">{pendingDailyRewards}</span>
+                ) : null}
+              </button>
               <button
                 className="questsButton"
                 type="button"
@@ -4478,6 +5057,47 @@ export function KnightBattleGame() {
                 <div className="authActions battleDexActions">
                   <button className="secondaryButton" type="button" onClick={() => setQuestsOpen(false)}>
                     Close Quests
+                  </button>
+                </div>
+              </div>
+            </div>
+          ) : null}
+          {rewardsOpen ? (
+            <div className="arenaAbilityOverlay">
+              <div className="arenaAbilityPanel">
+                <p className="shopKicker">Daily Rewards</p>
+                <h2>{pendingDailyRewards > 0 ? "Rewards Ready" : "No Reward Ready Yet"}</h2>
+                <p>
+                  {pendingDailyRewards > 0
+                    ? `${pendingDailyRewards} daily reward${pendingDailyRewards === 1 ? "" : "s"} waiting. Rewards still stack after 12:00 AM even if you were signed out.`
+                    : "Come back after 12:00 AM for the next daily reward. Rewards can only be claimed while signed in."}
+                </p>
+                <p>
+                  Silver Chest and Gold Chest uses also stack after midnight in groups of {DAILY_CHEST_BUY_LIMIT}.
+                </p>
+                <div className="arenaAbilityGrid">
+                  <div className="arenaAbilityCard dexInfoCard">
+                    <strong>Next Reward</strong>
+                    <span>{nextDailyReward.label}</span>
+                    <span>Track Day {(dailyRewards.totalClaims % DAILY_REWARD_TRACK.length) + 1}</span>
+                  </div>
+                  <button
+                    className="arenaAbilityCard"
+                    type="button"
+                    disabled={pendingDailyRewards <= 0}
+                    onClick={claimDailyReward}
+                  >
+                    <strong>Claim Reward</strong>
+                    <span>
+                      {pendingDailyRewards > 0
+                        ? `Claim ${nextDailyReward.label} now.`
+                        : "Nothing to claim yet."}
+                    </span>
+                  </button>
+                </div>
+                <div className="authActions battleDexActions">
+                  <button className="secondaryButton" type="button" onClick={() => setRewardsOpen(false)}>
+                    Close Rewards
                   </button>
                 </div>
               </div>
@@ -4801,6 +5421,45 @@ export function KnightBattleGame() {
               </div>
             </div>
           ) : null}
+          {gemChestOpening ? (
+            <div className="arenaAbilityOverlay">
+              <div className="arenaAbilityPanel">
+                <p className="shopKicker">
+                  {gemChestOpening.tier === "grand"
+                    ? "Grand Gem Chest"
+                    : gemChestOpening.tier === "silver"
+                      ? "Silver Chest"
+                      : gemChestOpening.tier === "gold"
+                        ? "Gold Chest"
+                        : "Gem Chest"}
+                </p>
+                <h2>{gemChestOpening.tapsLeft > 1 ? "Tap To Crack It Open" : "Tap To Open"}</h2>
+                <p>
+                  {gemChestOpening.tapsLeft > 1
+                    ? `${gemChestOpening.tapsLeft - 1} crack tap${gemChestOpening.tapsLeft - 1 === 1 ? "" : "s"} left, then 1 final tap to open it.`
+                    : "One more tap opens the gem chest and gives the reward automatically."}
+                </p>
+                <div className="arenaAbilityGrid">
+                  <button
+                    className="arenaAbilityCard"
+                    type="button"
+                    onClick={tapGemChest}
+                  >
+                    <strong>
+                      {gemChestOpening.tapsLeft > 1
+                        ? `Tap Chest (${gemChestOpening.tapsLeft - 1} left)`
+                        : "Open Chest"}
+                    </strong>
+                    <span>
+                      {gemChestOpening.tapsLeft > 1
+                        ? "Keep tapping like a Clash Royale chest."
+                        : "Claim the reward now."}
+                    </span>
+                  </button>
+                </div>
+              </div>
+            </div>
+          ) : null}
         </div>
         {screen === "playing" ? (
           <>
@@ -4858,6 +5517,32 @@ export function KnightBattleGame() {
                     {isTroopUnlocked("sniper")
                       ? `Sniper Clone - ${SHOP_COSTS.sniper} Silver`
                       : "Unlock Sniper Clone in Battle Dex"}
+                  </button>
+                  <button
+                    className="shopButton"
+                    type="button"
+                    disabled={
+                      stateRef.current.player.silverCoins < SHOP_COSTS.cloneCommander ||
+                      stateRef.current.allies.some((ally) => ally.kind === "clone_commander")
+                    }
+                    onClick={() => buySpecialTroop("clone_commander", SHOP_COSTS.cloneCommander)}
+                  >
+                    {stateRef.current.allies.some((ally) => ally.kind === "clone_commander")
+                      ? "Clone Commander - Already Hired"
+                      : `Clone Commander - ${SHOP_COSTS.cloneCommander} Silver`}
+                  </button>
+                  <button
+                    className="shopButton"
+                    type="button"
+                    disabled={
+                      stateRef.current.player.silverCoins < SHOP_COSTS.medicClone ||
+                      stateRef.current.allies.some((ally) => ally.kind === "medic_clone")
+                    }
+                    onClick={() => buySpecialTroop("medic_clone", SHOP_COSTS.medicClone)}
+                  >
+                    {stateRef.current.allies.some((ally) => ally.kind === "medic_clone")
+                      ? "Medic Clone - Already Hired"
+                      : `Medic Clone - ${SHOP_COSTS.medicClone} Silver`}
                   </button>
                   <button
                     className="shopButton"
@@ -4922,7 +5607,9 @@ export function KnightBattleGame() {
                 ) : null}
                 {selectedTroop ? (
                   <p className="shopCopy">
-                    HP Max {selectedTroop.maxHealth}/{TROOP_MAX_HP} | Range Lv {selectedTroop.rangeLevel}/{TROOP_RANGE_MAX_LEVEL} | Speed Lv {selectedTroop.speedLevel}/{TROOP_SPEED_MAX_LEVEL}
+                    {isSpecialHeroTroop(selectedTroop.kind)
+                      ? "Special troop: no upgrades. Clone Commander and Medic Clone keep their own base stats."
+                      : `HP Max ${selectedTroop.maxHealth}/${TROOP_MAX_HP} | Range Lv ${selectedTroop.rangeLevel}/${TROOP_RANGE_MAX_LEVEL} | Speed Lv ${selectedTroop.speedLevel}/${TROOP_SPEED_MAX_LEVEL}`}
                   </p>
                 ) : null}
                 <div className="shopActions">
@@ -5034,7 +5721,7 @@ export function KnightBattleGame() {
                 <p className="shopKicker">Gem Chests</p>
                 <h2>Open With Gems</h2>
                 <p className="shopCopy">
-                  Spend gems for a chest. Sometimes you get silver, sometimes gold, and sometimes a rare weapon.
+                  Spend gems for a chest. Basic chests can give big rewards, and the more expensive grand chest gives even more gold, silver, or abilities, plus a better rare weapon chance.
                 </p>
                 {shopChestMessage ? <p className="shopCopy">{shopChestMessage}</p> : null}
                 <div className="shopActions">
@@ -5042,9 +5729,37 @@ export function KnightBattleGame() {
                     className="shopButton"
                     type="button"
                     disabled={gems < GEM_CHEST_COST}
-                    onClick={openGemChest}
+                    onClick={() => openGemChest("basic")}
                   >
                     Gem Chest - {GEM_CHEST_COST} Gems
+                  </button>
+                  <button
+                    className="shopButton"
+                    type="button"
+                    disabled={gems < GRAND_GEM_CHEST_COST}
+                    onClick={() => openGemChest("grand")}
+                  >
+                    Grand Gem Chest - {GRAND_GEM_CHEST_COST} Gems
+                  </button>
+                  <button
+                    className="shopButton"
+                    type="button"
+                    disabled={gems < SILVER_CHEST_GEM_COST || silverChestUsesAvailable <= 0}
+                    onClick={() => buyCoinChest("silver")}
+                  >
+                    {silverChestUsesAvailable > 0
+                      ? `Silver Chest - ${SILVER_CHEST_GEM_COST} Gems (${silverChestUsesAvailable} buys available)`
+                      : "Silver Chest - No Buys Available"}
+                  </button>
+                  <button
+                    className="shopButton"
+                    type="button"
+                    disabled={gems < GOLD_CHEST_GEM_COST || goldChestUsesAvailable <= 0}
+                    onClick={() => buyCoinChest("gold")}
+                  >
+                    {goldChestUsesAvailable > 0
+                      ? `Gold Chest - ${GOLD_CHEST_GEM_COST} Gems (${goldChestUsesAvailable} buys available)`
+                      : "Gold Chest - No Buys Available"}
                   </button>
                 </div>
               </section>
