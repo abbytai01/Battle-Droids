@@ -46,6 +46,7 @@ const SHOP_COSTS = {
 const TROOP_UPGRADE_COST = 8;
 const TROOP_MAX_HP = 15;
 const TROOP_RANGE_MAX_LEVEL = 100;
+const MASTER_TRAINER_RANGE_TARGET = 20;
 const TROOP_SPEED_MAX_LEVEL = 10;
 const TROOP_NAMES = [
   "Dylan",
@@ -474,7 +475,7 @@ const QUESTS: QuestDefinition[] = [
   {
     id: "master_trainer",
     name: "Master Trainer",
-    description: "In one run, max health, range, and speed for every troop type.",
+    description: "In one run, upgrade one of every troop type to max health, range level 20, and max speed.",
     rewardLabel: "75 Gold"
   }
 ];
@@ -2712,7 +2713,7 @@ export function KnightBattleGame() {
         (ally) =>
           ally.kind === kind &&
           ally.maxHealth >= TROOP_MAX_HP &&
-          ally.rangeLevel >= TROOP_RANGE_MAX_LEVEL &&
+          ally.rangeLevel >= MASTER_TRAINER_RANGE_TARGET &&
           ally.speedLevel >= TROOP_SPEED_MAX_LEVEL
       )
     );
