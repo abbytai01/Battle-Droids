@@ -61,7 +61,13 @@ const TROOP_NAMES = [
   "Nova"
 ];
 const BASE_WEAPONS: WeaponType[] = ["lightsaber", "blaster"];
-const RARE_WEAPONS: WeaponType[] = ["heavy_blaster", "double_lightsaber", "ion_blaster", "lightsaber_gun"];
+const RARE_WEAPONS: WeaponType[] = [
+  "heavy_blaster",
+  "double_lightsaber",
+  "ion_blaster",
+  "lightsaber_gun",
+  "dual_pistol"
+];
 const ALL_TROOPS = ["squire", "archer", "shieldsman", "sniper"] as const;
 type UnlockableTroopKind = (typeof ALL_TROOPS)[number];
 const TROOP_UNLOCK_COSTS: Record<(typeof ALL_TROOPS)[number], number> = {
@@ -70,15 +76,22 @@ const TROOP_UNLOCK_COSTS: Record<(typeof ALL_TROOPS)[number], number> = {
   shieldsman: 40,
   sniper: 55
 };
+const QUEST_MASTER_COMMANDER_REWARD = 2;
+const QUEST_MASTER_MEDIC_REWARD = 5;
 const ALL_ABILITIES: AbilityKind[] = [
   "fireball",
   "spike_trap",
+  "poison_trap",
   "dash_strike",
   "heal_pulse",
   "freeze_blast",
   "turret_droid",
   "shield_bubble",
-  "coin_magnet"
+  "coin_magnet",
+  "double_attack",
+  "double_strength",
+  "auto_regen",
+  "fortify"
 ];
 const RARE_WEAPON_RUN_COST = 1000;
 const RARE_WEAPON_PERMANENT_COST = 10000;
@@ -94,7 +107,10 @@ type QuestId =
   | "boss_breaker"
   | "treasure_hunter"
   | "clone_commander"
-  | "master_trainer";
+  | "master_trainer"
+  | "gold_hunter"
+  | "gold_legend"
+  | "quest_master";
 
 type EnemyKind = "scout" | "brute" | "commando" | "droideka" | "sith";
 type AllyKind =
@@ -113,19 +129,25 @@ type WeaponType =
   | "heavy_blaster"
   | "double_lightsaber"
   | "ion_blaster"
-  | "lightsaber_gun";
+  | "lightsaber_gun"
+  | "dual_pistol";
 type JediCharacter = "Obi-Wan" | "Anakin" | "Mace Windu";
 type CoinKind = "silver" | "gold";
 type SpawnSide = "left" | "right";
 type AbilityKind =
   | "fireball"
   | "spike_trap"
+  | "poison_trap"
   | "dash_strike"
   | "heal_pulse"
   | "freeze_blast"
   | "turret_droid"
   | "shield_bubble"
-  | "coin_magnet";
+  | "coin_magnet"
+  | "double_attack"
+  | "double_strength"
+  | "auto_regen"
+  | "fortify";
 
 type Enemy = {
   id: number;
@@ -150,6 +172,9 @@ type Enemy = {
   shieldPattern?: boolean;
   hitsTaken?: number;
   slowTimer?: number;
+  poisonTimer?: number;
+  poisonTickTimer?: number;
+  poisonDamage?: number;
   rolling?: boolean;
   summonTimer?: number;
 };
@@ -229,6 +254,9 @@ type SpikeTrap = {
   damage: number;
   armTimer: number;
   hitIds: number[];
+  poisonDamage?: number;
+  poisonDuration?: number;
+  slowDuration?: number;
 };
 
 type Turret = {
@@ -292,8 +320,15 @@ type Player = {
   turretDroidLevel: number;
   shieldBubbleLevel: number;
   coinMagnetLevel: number;
+  poisonTrapLevel: number;
+  doubleAttackLevel: number;
+  doubleStrengthLevel: number;
+  autoRegenLevel: number;
+  fortifyLevel: number;
+  damageMultiplier: number;
   fireballCooldown: number;
   spikeTrapCooldown: number;
+  poisonTrapCooldown: number;
   dashStrikeCooldown: number;
   healPulseCooldown: number;
   freezeBlastCooldown: number;
@@ -302,6 +337,7 @@ type Player = {
   shieldBubbleTimer: number;
   coinMagnetCooldown: number;
   coinMagnetTimer: number;
+  autoRegenTimer: number;
 };
 
 type GameState = {
@@ -323,6 +359,7 @@ type GameState = {
   chestTimer: number;
   bossActive: boolean;
   bossWave: number;
+  waveSpawnsLeft: number;
   chestsOpened: number;
   bossesDefeated: number;
   nextEnemyId: number;
@@ -477,6 +514,24 @@ const QUESTS: QuestDefinition[] = [
     name: "Master Trainer",
     description: "In one run, upgrade one of every troop type to max health, range level 20, and max speed.",
     rewardLabel: "75 Gold"
+  },
+  {
+    id: "gold_hunter",
+    name: "Gold Hunter",
+    description: "Reach 100 Gold in one run.",
+    rewardLabel: "10 Gems"
+  },
+  {
+    id: "gold_legend",
+    name: "Gold Legend",
+    description: "Reach 1,000 Gold in one run.",
+    rewardLabel: "40 Gems"
+  },
+  {
+    id: "quest_master",
+    name: "Quest Master",
+    description: "Complete every other quest, then claim your all-quests prize.",
+    rewardLabel: "2 Clone Commanders + 5 Medic Clones"
   }
 ];
 
@@ -485,6 +540,8 @@ type PermanentShop = {
   archer: number;
   shieldsman: number;
   sniper: number;
+  cloneCommander: number;
+  medicClone: number;
   food: number;
   shield: number;
   troopShield: number;
@@ -495,6 +552,7 @@ function clamp(value: number, min: number, max: number) {
 }
 
 function weaponLabel(weapon: WeaponType) {
+  if (weapon === "dual_pistol") return "Dual Pistol";
   if (weapon === "lightsaber_gun") return "Lightsaber Gun";
   if (weapon === "heavy_blaster") return "Heavy Blaster";
   if (weapon === "double_lightsaber") return "Double Lightsaber";
@@ -504,6 +562,7 @@ function weaponLabel(weapon: WeaponType) {
 }
 
 function weaponDescription(weapon: WeaponType) {
+  if (weapon === "dual_pistol") return "Twin blasters that can hit two droids at once. Opens chests in 5 shots.";
   if (weapon === "lightsaber_gun") return "A hybrid weapon that shoots blasts and can slash up close with Q. Opens chests in 5 hits.";
   if (weapon === "heavy_blaster") return "Long range, heavy damage, and opens chests in 5 shots.";
   if (weapon === "double_lightsaber") return "Wide melee swings that can hit more enemies up close. Opens chests in 1 hit.";
@@ -514,6 +573,7 @@ function weaponDescription(weapon: WeaponType) {
 
 function chestDamageForWeapon(weapon: WeaponType) {
   if (weapon === "lightsaber_gun") return 2;
+  if (weapon === "dual_pistol") return 2;
   if (weapon === "double_lightsaber") return 10;
   if (weapon === "lightsaber") return 5;
   if (weapon === "heavy_blaster" || weapon === "ion_blaster") return 2;
@@ -529,10 +589,17 @@ function isMeleeWeapon(weapon: WeaponType) {
 }
 
 function isRangedWeapon(weapon: WeaponType) {
-  return weapon === "blaster" || weapon === "heavy_blaster" || weapon === "ion_blaster" || weapon === "lightsaber_gun";
+  return (
+    weapon === "blaster" ||
+    weapon === "heavy_blaster" ||
+    weapon === "ion_blaster" ||
+    weapon === "lightsaber_gun" ||
+    weapon === "dual_pistol"
+  );
 }
 
 function weaponRange(weapon: WeaponType) {
+  if (weapon === "dual_pistol") return 180;
   if (weapon === "lightsaber_gun") return 165;
   if (weapon === "heavy_blaster") return 220;
   if (weapon === "ion_blaster") return 150;
@@ -691,6 +758,11 @@ function waveWithinLevel(globalWave: number) {
   return ((globalWave - 1) % WAVES_PER_LEVEL) + 1;
 }
 
+function enemiesToSpawnForWave(wave: number) {
+  if (isBossWave(wave)) return 0;
+  return 4 + waveWithinLevel(wave) + Math.floor((wave - 1) / 2);
+}
+
 function reduceDamageByShield(damage: number, shieldLevel: number) {
   if (shieldLevel >= 2) return Math.max(0.5, damage * 0.25);
   if (shieldLevel === 1) return Math.max(0.5, damage * 0.5);
@@ -742,7 +814,8 @@ function renderWeaponDexPreview(weapon: WeaponType) {
       <span className="dexPreviewHandle" />
       <span className="dexPreviewBlade" />
       {weapon === "double_lightsaber" ? <span className="dexPreviewBlade dexPreviewBladeBack" /> : null}
-      {weapon === "lightsaber_gun" ? <span className="dexPreviewMuzzle" /> : null}
+      {weapon === "lightsaber_gun" || weapon === "dual_pistol" ? <span className="dexPreviewMuzzle" /> : null}
+      {weapon === "dual_pistol" ? <span className="dexPreviewMuzzle dexPreviewBladeBack" /> : null}
     </div>
   );
 }
@@ -759,8 +832,9 @@ function renderAbilityDexPreview(ability: AbilityKind) {
 function rareWeaponPriority(weapon: WeaponType) {
   if (weapon === "ion_blaster") return 0;
   if (weapon === "heavy_blaster") return 1;
-  if (weapon === "lightsaber_gun") return 2;
-  return 3;
+  if (weapon === "dual_pistol") return 2;
+  if (weapon === "lightsaber_gun") return 3;
+  return 4;
 }
 
 function chooseRareWeaponChestOptions(lockedWeapons: WeaponType[]) {
@@ -873,6 +947,8 @@ function makePermanentShop(): PermanentShop {
     archer: 0,
     shieldsman: 0,
     sniper: 0,
+    cloneCommander: 0,
+    medicClone: 0,
     food: 0,
     shield: 0,
     troopShield: 0
@@ -924,8 +1000,15 @@ function makeInitialState(): GameState {
       turretDroidLevel: 0,
       shieldBubbleLevel: 0,
       coinMagnetLevel: 0,
+      poisonTrapLevel: 0,
+      doubleAttackLevel: 0,
+      doubleStrengthLevel: 0,
+      autoRegenLevel: 0,
+      fortifyLevel: 0,
+      damageMultiplier: 1,
       fireballCooldown: 0,
       spikeTrapCooldown: 0,
+      poisonTrapCooldown: 0,
       dashStrikeCooldown: 0,
       healPulseCooldown: 0,
       freezeBlastCooldown: 0,
@@ -933,7 +1016,8 @@ function makeInitialState(): GameState {
       shieldBubbleCooldown: 0,
       shieldBubbleTimer: 0,
       coinMagnetCooldown: 0,
-      coinMagnetTimer: 0
+      coinMagnetTimer: 0,
+      autoRegenTimer: 0
     },
     enemies: [],
     allies: [],
@@ -952,6 +1036,7 @@ function makeInitialState(): GameState {
     chestTimer: CHEST_MIN_DELAY + Math.random() * CHEST_RANDOM_DELAY,
     bossActive: false,
     bossWave: 0,
+    waveSpawnsLeft: enemiesToSpawnForWave(1),
     chestsOpened: 0,
     bossesDefeated: 0,
     nextEnemyId: 1,
@@ -991,12 +1076,17 @@ function makeHudState(state: GameState): HudState {
 function abilityLevel(player: Player, ability: AbilityKind) {
   if (ability === "fireball") return player.fireballLevel;
   if (ability === "spike_trap") return player.spikeTrapLevel;
+  if (ability === "poison_trap") return player.poisonTrapLevel;
   if (ability === "dash_strike") return player.dashStrikeLevel;
   if (ability === "heal_pulse") return player.healPulseLevel;
   if (ability === "freeze_blast") return player.freezeBlastLevel;
   if (ability === "turret_droid") return player.turretDroidLevel;
   if (ability === "shield_bubble") return player.shieldBubbleLevel;
-  return player.coinMagnetLevel;
+  if (ability === "coin_magnet") return player.coinMagnetLevel;
+  if (ability === "double_attack") return player.doubleAttackLevel;
+  if (ability === "double_strength") return player.doubleStrengthLevel;
+  if (ability === "auto_regen") return player.autoRegenLevel;
+  return player.fortifyLevel;
 }
 
 function rewardCoresForScore(score: number) {
@@ -1252,23 +1342,33 @@ function spawnParticleBurst(
 function abilityLabel(ability: AbilityKind) {
   if (ability === "fireball") return "Fireball";
   if (ability === "spike_trap") return "Spike Trap";
+  if (ability === "poison_trap") return "Poison Trap";
   if (ability === "dash_strike") return "Dash Strike";
   if (ability === "heal_pulse") return "Heal Pulse";
   if (ability === "freeze_blast") return "Freeze Blast";
   if (ability === "turret_droid") return "Turret Droid";
   if (ability === "shield_bubble") return "Shield Bubble";
-  return "Coin Magnet";
+  if (ability === "coin_magnet") return "Coin Magnet";
+  if (ability === "double_attack") return "Double Attack";
+  if (ability === "double_strength") return "Double Strength";
+  if (ability === "auto_regen") return "Auto Regeneration";
+  return "Fortify";
 }
 
 function abilityDescription(ability: AbilityKind) {
   if (ability === "fireball") return "Arrow Up shoots a fireball forward.";
   if (ability === "spike_trap") return "Arrow Down drops spikes near you.";
+  if (ability === "poison_trap") return "V drops a poison trap that stings and slows droids for a few seconds.";
   if (ability === "dash_strike") return "Shift plus an arrow dashes and hits enemies.";
   if (ability === "heal_pulse") return "H heals you and nearby troops.";
   if (ability === "freeze_blast") return "F slows enemies in your chosen direction.";
   if (ability === "turret_droid") return "T places a short-lived shooting turret.";
   if (ability === "shield_bubble") return "Hold E to bubble-shield you and your troops.";
-  return "M pulls coins to you faster for a few seconds.";
+  if (ability === "coin_magnet") return "M pulls coins to you faster for a few seconds.";
+  if (ability === "double_attack") return "Your attacks can hit 2 enemies at once, and more if you level it again.";
+  if (ability === "double_strength") return "Your damage becomes doubled, and extra levels make it even stronger.";
+  if (ability === "auto_regen") return "Every few seconds, you regenerate 1 heart automatically.";
+  return "Gain extra max health right away, and more every time you level it.";
 }
 
 function directionFromKeys(keys: Record<string, boolean>, fallback: 1 | -1) {
@@ -1283,6 +1383,8 @@ function applyAbility(state: GameState, ability: AbilityKind) {
     player.fireballLevel += 1;
   } else if (ability === "spike_trap") {
     player.spikeTrapLevel += 1;
+  } else if (ability === "poison_trap") {
+    player.poisonTrapLevel += 1;
   } else if (ability === "dash_strike") {
     player.dashStrikeLevel += 1;
   } else if (ability === "heal_pulse") {
@@ -1293,6 +1395,19 @@ function applyAbility(state: GameState, ability: AbilityKind) {
     player.turretDroidLevel += 1;
   } else if (ability === "shield_bubble") {
     player.shieldBubbleLevel += 1;
+  } else if (ability === "double_attack") {
+    player.doubleAttackLevel += 1;
+    player.multiStrike = Math.max(player.multiStrike, player.doubleAttackLevel);
+  } else if (ability === "double_strength") {
+    player.doubleStrengthLevel += 1;
+    player.damageMultiplier = 2 + Math.max(0, player.doubleStrengthLevel - 1) * 0.5;
+  } else if (ability === "auto_regen") {
+    player.autoRegenLevel += 1;
+    player.autoRegenTimer = 2.6;
+  } else if (ability === "fortify") {
+    player.fortifyLevel += 1;
+    player.maxHealth += 2;
+    player.health = Math.min(MAX_HEARTS, player.health + 2);
   } else {
     player.coinMagnetLevel += 1;
   }
@@ -1319,7 +1434,7 @@ function triggerAbility(
       vx: direction * (360 + player.fireballLevel * 20),
       startX: centerX,
       maxDistance: WIDTH / 2,
-      damage: 2 + player.fireballLevel,
+      damage: (2 + player.fireballLevel) * player.damageMultiplier,
       life: 1.6,
       hitIds: [],
       chestHitIds: []
@@ -1339,11 +1454,40 @@ function triggerAbility(
       y: FLOOR_Y - 16,
       w: trapWidth,
       h: 18,
-      damage: 1 + player.spikeTrapLevel,
+      damage: (1 + player.spikeTrapLevel) * player.damageMultiplier,
       armTimer: 0.45,
-      hitIds: []
+      hitIds: [],
+      poisonDamage: 0,
+      poisonDuration: 0,
+      slowDuration: 0
     });
     spawnParticleBurst(state, trapX, FLOOR_Y - 14, 7, "#d7e0ef");
+  } else if (
+    ability === "poison_trap" &&
+    player.poisonTrapLevel > 0 &&
+    player.poisonTrapCooldown === 0
+  ) {
+    player.poisonTrapCooldown = 2.3;
+    const trapWidth = 56 + player.poisonTrapLevel * 8;
+    const trapX = clamp(
+      centerX + direction * (player.w + trapWidth / 2 + 18),
+      trapWidth / 2 + 20,
+      WIDTH - trapWidth / 2 - 20
+    );
+    state.spikeTraps.push({
+      id: state.nextTrapId++,
+      x: trapX,
+      y: FLOOR_Y - 16,
+      w: trapWidth,
+      h: 18,
+      damage: (1 + player.poisonTrapLevel) * player.damageMultiplier,
+      armTimer: 0.45,
+      hitIds: [],
+      poisonDamage: 0.4 + player.poisonTrapLevel * 0.25,
+      poisonDuration: 2.4 + player.poisonTrapLevel * 0.6,
+      slowDuration: 1.8 + player.poisonTrapLevel * 0.45
+    });
+    spawnParticleBurst(state, trapX, FLOOR_Y - 14, 8, "#7ee38b");
   } else if (
     ability === "dash_strike" &&
     player.dashStrikeLevel > 0 &&
@@ -1355,7 +1499,7 @@ function triggerAbility(
     player.x = clamp(player.x + direction * dashDistance, 40, WIDTH - player.w - 40);
     player.facing = direction;
     player.invuln = Math.max(player.invuln, 0.28);
-    const dashDamage = 2 + player.dashStrikeLevel;
+    const dashDamage = (2 + player.dashStrikeLevel) * player.damageMultiplier;
     const dashBox = {
       x: Math.min(startX, player.x) - 8,
       y: player.y - 2,
@@ -1415,7 +1559,7 @@ function triggerAbility(
       x: centerX,
       y: FLOOR_Y - 42,
       life: 5 + player.turretDroidLevel,
-      damage: 1 + Math.floor(player.turretDroidLevel / 2),
+      damage: (1 + Math.floor(player.turretDroidLevel / 2)) * player.damageMultiplier,
       range: 250 + player.turretDroidLevel * 18,
       cooldown: 0.2
     });
@@ -1500,7 +1644,9 @@ function useSpecialTroopAbility(state: GameState, ally: Ally, target: Enemy | nu
       vx: direction * (340 + player.fireballLevel * 18),
       startX: centerX,
       maxDistance: WIDTH / 2,
-      damage: ally.kind === "clone_commander" ? 2 + player.fireballLevel : 1 + player.fireballLevel,
+      damage:
+        (ally.kind === "clone_commander" ? 2 + player.fireballLevel : 1 + player.fireballLevel) *
+        player.damageMultiplier,
       life: 1.5,
       hitIds: [],
       chestHitIds: []
@@ -1644,6 +1790,12 @@ function applyPermanentShop(state: GameState, shop: PermanentShop) {
   for (let index = 0; index < shop.sniper; index += 1) {
     addAlly(state, "sniper");
   }
+  for (let index = 0; index < shop.cloneCommander; index += 1) {
+    addAlly(state, "clone_commander");
+  }
+  for (let index = 0; index < shop.medicClone; index += 1) {
+    addAlly(state, "medic_clone");
+  }
   state.player.health = Math.min(maxFoodHealth(state.player), state.player.health + shop.food);
   state.player.shieldBlocks = Math.min(MAX_SHIELD_LEVEL, shop.shield);
 }
@@ -1714,13 +1866,18 @@ function drawHealthHeartsWithPulse(
   tick: number,
   heartbeatOn: boolean
 ) {
-  const pulse = heartbeatOn ? Math.sin(tick * 6) * (health <= maxHealth * 0.35 ? 3 : 1.5) : 0;
   const heartsToShow = Math.min(MAX_HEARTS, Math.ceil(Math.max(maxHealth, health)));
   for (let index = 0; index < heartsToShow; index += 1) {
     const row = Math.floor(index / HEARTS_PER_ROW);
     const column = index % HEARTS_PER_ROW;
     const remaining = health - index;
     const amount = remaining >= 1 ? "full" : remaining >= 0.5 ? "half" : "empty";
+    const patternDirection = (index + row) % 2 === 0 ? 1 : -1;
+    const pulse = heartbeatOn
+      ? Math.sin(tick * 6 + column * 0.35) *
+        (health <= maxHealth * 0.35 ? 3 : 1.5) *
+        patternDirection
+      : 0;
     drawHeart(ctx, 34 + column * 18, 40 + row * 22 + pulse, amount, index >= maxHealth);
   }
 }
@@ -1738,6 +1895,8 @@ function drawPlayerAttackRange(ctx: CanvasRenderingContext2D, player: Player) {
       ? "rgba(255, 176, 86, 0.82)"
       : player.weapon === "ion_blaster"
         ? "rgba(110, 255, 236, 0.78)"
+        : player.weapon === "dual_pistol"
+          ? "rgba(255, 150, 128, 0.82)"
         : player.weapon === "double_lightsaber"
           ? "rgba(180, 124, 255, 0.82)"
       : player.weapon === "blaster"
@@ -1754,6 +1913,8 @@ function drawPlayerAttackRange(ctx: CanvasRenderingContext2D, player: Player) {
       ? "#ffb056"
       : player.weapon === "ion_blaster"
         ? "#6effec"
+        : player.weapon === "dual_pistol"
+          ? "#ff9680"
         : player.weapon === "double_lightsaber"
           ? "#b47cff"
           : player.weapon === "blaster" ? "#8bd3ff" : "#ffe282";
@@ -1799,6 +1960,62 @@ function drawShieldBubble(ctx: CanvasRenderingContext2D, player: Player) {
   drawEnergyBubble(ctx, centerX, centerY, radius, Math.min(1, progress));
 }
 
+function drawGroundShadow(
+  ctx: CanvasRenderingContext2D,
+  centerX: number,
+  baseY: number,
+  radiusX: number,
+  radiusY: number,
+  alpha = 0.22
+) {
+  ctx.save();
+  ctx.fillStyle = `rgba(6, 10, 18, ${alpha})`;
+  ctx.beginPath();
+  ctx.ellipse(Math.round(centerX), Math.round(baseY), radiusX, radiusY, 0, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.restore();
+}
+
+function drawBeveledPanel(
+  ctx: CanvasRenderingContext2D,
+  x: number,
+  y: number,
+  w: number,
+  h: number,
+  base: string,
+  highlight: string,
+  shadow: string
+) {
+  ctx.fillStyle = base;
+  ctx.fillRect(x, y, w, h);
+  ctx.fillStyle = highlight;
+  ctx.fillRect(x, y, w, 4);
+  ctx.fillRect(x, y, 4, h);
+  ctx.fillStyle = shadow;
+  ctx.fillRect(x, y + h - 4, w, 4);
+  ctx.fillRect(x + w - 4, y, 4, h);
+}
+
+function drawBeveledBar(
+  ctx: CanvasRenderingContext2D,
+  x: number,
+  y: number,
+  w: number,
+  h: number,
+  ratio: number,
+  fill: string,
+  topGlow: string
+) {
+  drawBeveledPanel(ctx, x, y, w, h, "#1b2433", "#405676", "#09111b");
+  const innerWidth = Math.max(0, Math.round((w - 6) * clamp(ratio, 0, 1)));
+  ctx.fillStyle = fill;
+  ctx.fillRect(x + 3, y + 3, innerWidth, Math.max(0, h - 6));
+  if (innerWidth > 0) {
+    ctx.fillStyle = topGlow;
+    ctx.fillRect(x + 4, y + 4, Math.max(0, innerWidth - 2), 2);
+  }
+}
+
 function drawPixelKnight(
   ctx: CanvasRenderingContext2D,
   player: Player,
@@ -1816,6 +2033,7 @@ function drawPixelKnight(
     character === "Mace Windu" ? "#b47cff" : character === "Anakin" ? "#7ec8ff" : "#8fe6ff";
   const armor = flash ? "#fff5e1" : tunic;
 
+  drawGroundShadow(ctx, x + player.w / 2, y + player.h + 2, 20, 6, 0.24);
   drawShieldBubble(ctx, player);
 
   ctx.fillStyle = character === "Anakin" ? "#3b2418" : character === "Mace Windu" ? "#2c1f18" : "#b88754";
@@ -1874,14 +2092,33 @@ function drawPixelKnight(
     const isHeavyBlaster = player.weapon === "heavy_blaster";
     const isIonBlaster = player.weapon === "ion_blaster";
     const isLightsaberGun = player.weapon === "lightsaber_gun";
+    const isDualPistol = player.weapon === "dual_pistol";
     ctx.fillStyle = "#222b3d";
-    ctx.fillRect(gunX, handY - (isHeavyBlaster ? 3 : 1), isHeavyBlaster ? 28 : isIonBlaster ? 24 : isLightsaberGun ? 24 : 20, isHeavyBlaster ? 12 : isIonBlaster ? 11 : isLightsaberGun ? 10 : 9);
-    ctx.fillStyle = isHeavyBlaster ? "#8a5b32" : isIonBlaster ? "#2d8a86" : isLightsaberGun ? "#58657e" : "#62718d";
-    ctx.fillRect(facing === 1 ? gunX + (isHeavyBlaster ? 24 : isIonBlaster ? 20 : isLightsaberGun ? 20 : 16) : gunX - 8, handY + 1, 10, 4);
-    ctx.fillStyle = isHeavyBlaster ? "#ffb056" : isIonBlaster ? "#6effec" : isLightsaberGun ? saber : "#8bd3ff";
-    ctx.fillRect(gunX + 5, handY + 1, isHeavyBlaster ? 8 : isIonBlaster ? 7 : isLightsaberGun ? 8 : 5, 3);
-    ctx.fillStyle = "#111827";
-    ctx.fillRect(facing === 1 ? gunX + 7 : gunX + 8, handY + 8, 5, 7);
+    ctx.fillRect(
+      gunX,
+      handY - (isHeavyBlaster ? 3 : isDualPistol ? 2 : 1),
+      isHeavyBlaster ? 28 : isIonBlaster ? 24 : isLightsaberGun ? 24 : isDualPistol ? 22 : 20,
+      isHeavyBlaster ? 12 : isIonBlaster ? 11 : isLightsaberGun ? 10 : isDualPistol ? 12 : 9
+    );
+    ctx.fillStyle = isHeavyBlaster ? "#8a5b32" : isIonBlaster ? "#2d8a86" : isLightsaberGun ? "#58657e" : isDualPistol ? "#7f5661" : "#62718d";
+    ctx.fillRect(
+      facing === 1 ? gunX + (isHeavyBlaster ? 24 : isIonBlaster ? 20 : isLightsaberGun ? 20 : isDualPistol ? 18 : 16) : gunX - 8,
+      handY + 1,
+      10,
+      4
+    );
+    ctx.fillStyle = isHeavyBlaster ? "#ffb056" : isIonBlaster ? "#6effec" : isLightsaberGun ? saber : isDualPistol ? "#ff9680" : "#8bd3ff";
+    ctx.fillRect(gunX + 5, handY + 1, isHeavyBlaster ? 8 : isIonBlaster ? 7 : isLightsaberGun ? 8 : isDualPistol ? 7 : 5, 3);
+    if (isDualPistol) {
+      ctx.fillStyle = "#222b3d";
+      ctx.fillRect(gunX + 2, handY + 8, 16, 3);
+      ctx.fillStyle = "#ff9680";
+      ctx.fillRect(gunX + 4, handY + 8, 5, 2);
+      ctx.fillRect(gunX + 11, handY + 8, 5, 2);
+    } else {
+      ctx.fillStyle = "#111827";
+      ctx.fillRect(facing === 1 ? gunX + 7 : gunX + 8, handY + 8, 5, 7);
+    }
     if (isLightsaberGun) {
       ctx.fillStyle = saber;
       ctx.fillRect(facing === 1 ? gunX - 18 : gunX + 24, handY + 2, 18, 3);
@@ -1911,6 +2148,14 @@ function drawPixelKnight(
 function drawEnemy(ctx: CanvasRenderingContext2D, enemy: Enemy) {
   const x = Math.round(enemy.x);
   const y = Math.round(enemy.y);
+  drawGroundShadow(
+    ctx,
+    x + enemy.w / 2,
+    y + enemy.h + 2,
+    enemy.kind === "sith" ? 26 : enemy.kind === "brute" ? 22 : 18,
+    enemy.kind === "sith" ? 8 : 6,
+    enemy.kind === "droideka" && enemy.rolling ? 0.28 : 0.22
+  );
 
   if (enemy.kind === "sith") {
     ctx.fillStyle = "#1b1020";
@@ -1928,10 +2173,7 @@ function drawEnemy(ctx: CanvasRenderingContext2D, enemy: Enemy) {
       ctx.fillRect(x - 10, y + 20, enemy.w + 20, 18);
     }
     const healthRatio = enemy.health / enemy.maxHealth;
-    ctx.fillStyle = "#241f24";
-    ctx.fillRect(x - 4, y - 12, enemy.w + 8, 6);
-    ctx.fillStyle = "#ff476f";
-    ctx.fillRect(x - 4, y - 12, (enemy.w + 8) * healthRatio, 6);
+    drawBeveledBar(ctx, x - 4, y - 12, enemy.w + 8, 8, healthRatio, "#ff476f", "#ff9bb7");
     return;
   }
 
@@ -1965,10 +2207,7 @@ function drawEnemy(ctx: CanvasRenderingContext2D, enemy: Enemy) {
     ctx.arc(centerX + 6, centerY - 7, 4, 0, Math.PI * 2);
     ctx.fill();
     const healthRatio = enemy.health / enemy.maxHealth;
-    ctx.fillStyle = "#241f24";
-    ctx.fillRect(x, y - 10, enemy.w, 4);
-    ctx.fillStyle = "#91d7ff";
-    ctx.fillRect(x, y - 10, enemy.w * healthRatio, 4);
+    drawBeveledBar(ctx, x, y - 10, enemy.w, 6, healthRatio, "#91d7ff", "#d7f3ff");
     return;
   }
 
@@ -2036,17 +2275,28 @@ function drawEnemy(ctx: CanvasRenderingContext2D, enemy: Enemy) {
   }
 
   const healthRatio = enemy.health / enemy.maxHealth;
-  ctx.fillStyle = "#241f24";
-  ctx.fillRect(x, y - 10, enemy.w, 4);
-  ctx.fillStyle =
+  drawBeveledBar(
+    ctx,
+    x,
+    y - 10,
+    enemy.w,
+    6,
+    healthRatio,
     enemy.kind === "brute"
       ? "#ff8366"
       : enemy.kind === "droideka"
         ? "#91d7ff"
         : enemy.kind === "commando"
           ? "#9eb7f0"
-          : "#ffca63";
-  ctx.fillRect(x, y - 10, enemy.w * healthRatio, 4);
+          : "#ffca63",
+    enemy.kind === "brute"
+      ? "#ffd0c4"
+      : enemy.kind === "droideka"
+        ? "#d7f3ff"
+        : enemy.kind === "commando"
+          ? "#d9e3ff"
+          : "#fff1c1"
+  );
 }
 
 function drawAlly(
@@ -2057,6 +2307,7 @@ function drawAlly(
 ) {
   const x = Math.round(ally.x);
   const y = Math.round(ally.y);
+  drawGroundShadow(ctx, x + ally.w / 2, y + ally.h + 2, 18, 5, 0.2);
   const marking =
     ally.kind === "clone_commander"
       ? "#3d7de0"
@@ -2144,10 +2395,7 @@ function drawAlly(
     ctx.fillText(ally.name, x + ally.w / 2, y - 12);
     ctx.textAlign = "left";
   }
-  ctx.fillStyle = "#182331";
-  ctx.fillRect(x, y - 8, ally.w, 4);
-  ctx.fillStyle = "#6fd476";
-  ctx.fillRect(x, y - 8, ally.w * healthRatio, 4);
+  drawBeveledBar(ctx, x, y - 8, ally.w, 6, healthRatio, "#6fd476", "#d9ffd9");
 }
 
 function drawBackground(ctx: CanvasRenderingContext2D, tick: number, enemyCount: number) {
@@ -2270,6 +2518,8 @@ function readPermanentShop(username: string): PermanentShop {
         archer: typeof parsed.archer === "number" ? parsed.archer : 0,
         shieldsman: typeof parsed.shieldsman === "number" ? parsed.shieldsman : 0,
         sniper: typeof parsed.sniper === "number" ? parsed.sniper : 0,
+        cloneCommander: typeof parsed.cloneCommander === "number" ? parsed.cloneCommander : 0,
+        medicClone: typeof parsed.medicClone === "number" ? parsed.medicClone : 0,
         food: typeof parsed.food === "number" ? parsed.food : 0,
         shield: typeof parsed.shield === "number" ? parsed.shield : 0,
         troopShield: typeof parsed.troopShield === "number" ? parsed.troopShield : 0
@@ -2696,8 +2946,33 @@ export function KnightBattleGame() {
     setHud(makeHud(state));
   };
 
-  const questComplete = (questId: QuestId) => {
+  const awardQuestMasterTroops = () => {
+    const username = playerName || "Pilot";
+    const nextShop = {
+      ...permanentShop,
+      cloneCommander: permanentShop.cloneCommander + QUEST_MASTER_COMMANDER_REWARD,
+      medicClone: permanentShop.medicClone + QUEST_MASTER_MEDIC_REWARD
+    };
+    setPermanentShop(nextShop);
+    writePermanentShop(username, nextShop);
+    if (screen === "playing") {
+      for (let index = 0; index < QUEST_MASTER_COMMANDER_REWARD; index += 1) {
+        addAlly(stateRef.current, "clone_commander");
+      }
+      for (let index = 0; index < QUEST_MASTER_MEDIC_REWARD; index += 1) {
+        addAlly(stateRef.current, "medic_clone");
+      }
+      setHud(makeHud(stateRef.current));
+    }
+  };
+
+  const questComplete = (questId: QuestId): boolean => {
     const state = stateRef.current;
+    if (questId === "quest_master") {
+      return QUESTS.filter((quest) => quest.id !== "quest_master").every(
+        (quest) => claimedQuests.includes(quest.id) || questComplete(quest.id)
+      );
+    }
     if (questId === "get_everything") {
       const troopKinds = new Set(state.allies.map((ally) => ally.kind));
       const allWeaponsUnlocked = [...BASE_WEAPONS, ...RARE_WEAPONS].every((weapon) => isWeaponUnlocked(state.player, weapon));
@@ -2708,6 +2983,8 @@ export function KnightBattleGame() {
     if (questId === "boss_breaker") return state.bossesDefeated >= 1;
     if (questId === "treasure_hunter") return state.chestsOpened >= 5;
     if (questId === "clone_commander") return state.allies.length >= 6;
+    if (questId === "gold_hunter") return state.player.silverCoins >= 1000;
+    if (questId === "gold_legend") return state.player.silverCoins >= 10000;
     return ALL_TROOPS.every((kind) =>
       state.allies.some(
         (ally) =>
@@ -2724,6 +3001,13 @@ export function KnightBattleGame() {
     const nextClaimedQuests = [...claimedQuests, questId];
     setClaimedQuests(nextClaimedQuests);
     writeClaimedQuests(playerName || "Pilot", nextClaimedQuests);
+    if (questId === "quest_master") {
+      awardQuestMasterTroops();
+      setQuestMessage(
+        `Quest complete: Quest Master! Reward: ${QUEST_MASTER_COMMANDER_REWARD} Clone Commanders and ${QUEST_MASTER_MEDIC_REWARD} Medic Clones.`
+      );
+      return;
+    }
     if (questId === "get_everything") {
       const nextSilver = stateRef.current.player.silverCoins + 500;
       stateRef.current.player.silverCoins = nextSilver;
@@ -2741,7 +3025,17 @@ export function KnightBattleGame() {
       return;
     }
     const gemReward =
-      questId === "boss_breaker" ? 12 : questId === "droid_crusher" ? 8 : questId === "treasure_hunter" ? 6 : 5;
+      questId === "gold_legend"
+        ? 40
+        : questId === "boss_breaker"
+          ? 12
+          : questId === "gold_hunter"
+            ? 10
+            : questId === "droid_crusher"
+              ? 8
+              : questId === "treasure_hunter"
+                ? 6
+                : 5;
     writeCurrentGems(gems + gemReward);
     setQuestMessage(`Quest complete! Reward: ${gemReward} Gems.`);
   };
@@ -3158,10 +3452,11 @@ export function KnightBattleGame() {
 
     state.level = nextLevel;
     state.wave = nextWave;
-    state.elapsed = (nextWave - 1) * LEVEL_DURATION;
+    state.elapsed = Math.max(0, state.elapsed);
     state.levelSpawnSide = randomSpawnSide();
     state.bossActive = false;
     state.bossWave = 0;
+    state.waveSpawnsLeft = enemiesToSpawnForWave(nextWave);
     state.spawnTimer = 1.5;
     state.enemies = [];
     state.projectiles = [];
@@ -3338,6 +3633,11 @@ export function KnightBattleGame() {
           setHud(makeHudState(stateRef.current));
           return;
         }
+        if (key.toLowerCase() === "c" && isWeaponUnlocked(stateRef.current.player, "dual_pistol")) {
+          stateRef.current.player.weapon = "dual_pistol";
+          setHud(makeHudState(stateRef.current));
+          return;
+        }
 
         if (!event.repeat) {
           if (key === "ArrowUp") {
@@ -3347,6 +3647,11 @@ export function KnightBattleGame() {
           }
           if (key === "ArrowDown") {
             triggerAbility(stateRef.current, "spike_trap", keysRef.current);
+            setHud(makeHudState(stateRef.current));
+            return;
+          }
+          if (key.toLowerCase() === "v") {
+            triggerAbility(stateRef.current, "poison_trap", keysRef.current);
             setHud(makeHudState(stateRef.current));
             return;
           }
@@ -3474,26 +3779,13 @@ export function KnightBattleGame() {
       lastTime = now;
 
       if (screen === "playing" && !paused && !abilityChoices && !rareWeaponReward && !rareWeaponChoices && !mathChallenge && !gemChestOpening && !rewardsOpen) {
-        if (!state.bossActive) {
-          state.elapsed += dt;
-        }
-        const nextWave = 1 + Math.floor(state.elapsed / LEVEL_DURATION);
-        const nextLevel = 1 + Math.floor((nextWave - 1) / WAVES_PER_LEVEL);
-        if (nextWave !== state.wave) {
-          state.wave = nextWave;
-          state.levelSpawnSide = randomSpawnSide();
-        }
+        state.elapsed += dt;
         if (isBossWave(state.wave) && !state.bossActive && state.bossWave !== state.wave) {
           state.bossActive = true;
           state.bossWave = state.wave;
           state.enemies = [];
           state.spawnTimer = 999;
           spawnEnemy(state, "sith");
-        }
-        if (nextLevel !== state.level) {
-          state.level = nextLevel;
-          setPaused(true);
-          setLevelReady(true);
         }
 
         const player = state.player;
@@ -3511,6 +3803,17 @@ export function KnightBattleGame() {
         player.shieldBubbleTimer = Math.max(0, player.shieldBubbleTimer - dt);
         player.coinMagnetCooldown = Math.max(0, player.coinMagnetCooldown - dt);
         player.coinMagnetTimer = Math.max(0, player.coinMagnetTimer - dt);
+        player.poisonTrapCooldown = Math.max(0, player.poisonTrapCooldown - dt);
+        player.autoRegenTimer = Math.max(0, player.autoRegenTimer - dt);
+        if (
+          player.autoRegenLevel > 0 &&
+          player.autoRegenTimer === 0 &&
+          player.health < player.maxHealth
+        ) {
+          player.health = Math.min(player.maxHealth, player.health + 1);
+          player.autoRegenTimer = Math.max(2.4, 6 - player.autoRegenLevel * 0.7);
+          spawnParticleBurst(state, player.x + player.w / 2, player.y + 20, 8, "#79f2a6");
+        }
         const shieldHeld = keysRef.current.e || keysRef.current.E;
         if (shieldHeld && player.attackTimer > 0) {
           player.shieldBubbleTimer = 0;
@@ -3567,10 +3870,12 @@ export function KnightBattleGame() {
         state.chestTimer -= dt;
 
         const spawnDelay = Math.max(1.45 - state.level * 0.08, 0.45);
-        if (!state.bossActive && state.spawnTimer <= 0) {
+        if (!state.bossActive && state.waveSpawnsLeft > 0 && state.spawnTimer <= 0) {
           spawnEnemy(state);
-          if (state.level >= 4 && Math.random() < 0.24) {
+          state.waveSpawnsLeft -= 1;
+          if (state.waveSpawnsLeft > 0 && state.level >= 4 && Math.random() < 0.24) {
             spawnEnemy(state);
+            state.waveSpawnsLeft -= 1;
           }
           state.spawnTimer = spawnDelay + Math.random() * 0.4;
         }
@@ -3625,6 +3930,13 @@ export function KnightBattleGame() {
           enemy.attackTimer = Math.max(0, enemy.attackTimer - dt);
           enemy.attackWindup = Math.max(0, enemy.attackWindup - dt);
           enemy.slowTimer = Math.max(0, (enemy.slowTimer ?? 0) - dt);
+          enemy.poisonTimer = Math.max(0, (enemy.poisonTimer ?? 0) - dt);
+          enemy.poisonTickTimer = Math.max(0, (enemy.poisonTickTimer ?? 0) - dt);
+          if ((enemy.poisonTimer ?? 0) > 0 && (enemy.poisonTickTimer ?? 0) === 0) {
+            enemy.poisonTickTimer = 0.5;
+            enemy.health -= enemy.poisonDamage ?? 0.5;
+            spawnParticleBurst(state, enemy.x + enemy.w / 2, enemy.y + enemy.h / 2, 4, "#7ee38b");
+          }
           enemy.facing = enemy.x > player.x ? -1 : 1;
           enemy.rolling = false;
           if (enemy.kind === "sith") {
@@ -3756,10 +4068,10 @@ export function KnightBattleGame() {
           }
         }
 
-        if ((slashBox || blasterBox) && player.attackHits < 1 + player.multiStrike) {
+        if ((slashBox || blasterBox) && player.attackHits < 1 + player.multiStrike + (player.weapon === "dual_pistol" ? 1 : 0)) {
           const playerCenterX = player.x + player.w / 2;
           const playerCenterY = player.y + player.h / 2;
-          const maxTargets = 1 + player.multiStrike;
+          const maxTargets = 1 + player.multiStrike + (player.weapon === "dual_pistol" ? 1 : 0);
           const attackTargets = state.enemies
             .filter(
               (enemy) =>
@@ -3788,6 +4100,8 @@ export function KnightBattleGame() {
                 ? player.comboStep === 3 ? 6.25 : 5.25
                 : player.weapon === "lightsaber_gun"
                   ? player.attackStyle === "hybrid_melee" ? 4.75 : 3.25
+                : player.weapon === "dual_pistol"
+                  ? 2.75
                 : player.weapon === "heavy_blaster"
                   ? 3.5
                   : player.weapon === "ion_blaster"
@@ -3795,7 +4109,7 @@ export function KnightBattleGame() {
                 : player.weapon === "blaster"
                   ? 1.5
                   : player.comboStep === 3 ? 5 : 4.25;
-            const damage = baseDamage + player.bonusDamage;
+            const damage = (baseDamage + player.bonusDamage) * player.damageMultiplier;
             const damaged = damageEnemy(
               state,
               enemy,
@@ -3810,6 +4124,8 @@ export function KnightBattleGame() {
                   ? 22
                   : player.weapon === "lightsaber_gun"
                     ? player.attackStyle === "hybrid_melee" ? 16 : 12
+                  : player.weapon === "dual_pistol"
+                    ? 10
                   : player.weapon === "heavy_blaster" ? 18 : player.weapon === "blaster" ? 8 : player.comboStep * 8;
               enemy.x += player.facing * (enemy.knockback + weaponKnockback);
             }
@@ -3819,11 +4135,15 @@ export function KnightBattleGame() {
               enemy.y + enemy.h / 3,
               player.weapon === "ion_blaster"
                 ? 12
+                : player.weapon === "dual_pistol"
+                  ? 8
                 : player.weapon === "heavy_blaster" ? 10 : player.weapon === "blaster" ? 5 : 7,
               player.weapon === "heavy_blaster"
                 ? "#ffb056"
                 : player.weapon === "ion_blaster"
                   ? "#6effec"
+                  : player.weapon === "dual_pistol"
+                    ? "#ff9680"
                   : player.weapon === "lightsaber_gun"
                     ? player.attackStyle === "hybrid_melee" ? "#8fe6ff" : "#8bd3ff"
                   : player.weapon === "double_lightsaber"
@@ -3938,9 +4258,9 @@ export function KnightBattleGame() {
                 target,
                 ally.kind === "clone_commander"
                   ? ally.weaponMode === "blaster"
-                    ? ally.damage + 1
-                    : ally.damage
-                  : ally.damage,
+                    ? (ally.damage + 1) * state.player.damageMultiplier
+                    : ally.damage * state.player.damageMultiplier
+                  : ally.damage * state.player.damageMultiplier,
                 target.x + target.w / 2,
                 target.y + 12,
                 "ranged"
@@ -3965,7 +4285,7 @@ export function KnightBattleGame() {
               const damaged = damageEnemy(
                 state,
                 target,
-                ally.damage,
+                ally.damage * state.player.damageMultiplier,
                 target.x + target.w / 2,
                 target.y + target.h / 2,
                 "melee"
@@ -4051,7 +4371,12 @@ export function KnightBattleGame() {
               trap.hitIds.push(enemy.id);
               enemyTouchedTrap = true;
               damageEnemy(state, enemy, trap.damage, enemy.x + enemy.w / 2, FLOOR_Y - 12, "melee");
-              enemy.slowTimer = Math.max(enemy.slowTimer ?? 0, 0.7);
+              enemy.slowTimer = Math.max(enemy.slowTimer ?? 0, trap.slowDuration ?? 0.7);
+              if ((trap.poisonDuration ?? 0) > 0) {
+                enemy.poisonTimer = Math.max(enemy.poisonTimer ?? 0, trap.poisonDuration ?? 0);
+                enemy.poisonTickTimer = 0.2;
+                enemy.poisonDamage = Math.max(enemy.poisonDamage ?? 0, trap.poisonDamage ?? 0.4);
+              }
               spawnParticleBurst(state, enemy.x + enemy.w / 2, FLOOR_Y - 12, 5, "#d7e0ef");
             }
           }
@@ -4106,9 +4431,32 @@ export function KnightBattleGame() {
         if (state.bossActive && state.enemies.length === 0) {
           state.bossActive = false;
           state.bossesDefeated += 1;
-          state.elapsed = state.wave * LEVEL_DURATION;
+          const nextWave = state.wave + 1;
+          const nextLevel = 1 + Math.floor((nextWave - 1) / WAVES_PER_LEVEL);
+          state.wave = nextWave;
+          state.levelSpawnSide = randomSpawnSide();
+          state.waveSpawnsLeft = enemiesToSpawnForWave(nextWave);
           state.spawnTimer = 1.8;
+          if (nextLevel !== state.level) {
+            state.level = nextLevel;
+            setPaused(true);
+            setLevelReady(true);
+          }
           spawnParticleBurst(state, player.x + player.w / 2, player.y + 20, 20, "#ffe282");
+        }
+
+        if (!state.bossActive && state.waveSpawnsLeft === 0 && state.enemies.length === 0) {
+          const nextWave = state.wave + 1;
+          const nextLevel = 1 + Math.floor((nextWave - 1) / WAVES_PER_LEVEL);
+          state.wave = nextWave;
+          state.levelSpawnSide = randomSpawnSide();
+          state.waveSpawnsLeft = enemiesToSpawnForWave(nextWave);
+          state.spawnTimer = 1.5;
+          if (nextLevel !== state.level) {
+            state.level = nextLevel;
+            setPaused(true);
+            setLevelReady(true);
+          }
         }
 
         state.allies = state.allies.filter((ally) => ally.health > 0);
@@ -4179,6 +4527,7 @@ export function KnightBattleGame() {
 
       for (const coin of state.coins) {
         const bobOffset = Math.sin(coin.bob) * 3;
+        drawGroundShadow(ctx, coin.x, coin.y + 15, 10, 4, 0.18);
         ctx.fillStyle = coin.kind === "gold" ? "#7a5b14" : "#5f6772";
         ctx.fillRect(Math.round(coin.x) - 8, Math.round(coin.y + bobOffset), 16, 16);
         ctx.fillStyle = coin.kind === "gold" ? "#f7b733" : "#d3d9e7";
@@ -4188,6 +4537,7 @@ export function KnightBattleGame() {
       }
 
       for (const chest of state.chests) {
+        drawGroundShadow(ctx, chest.x, chest.y + 16, 18, 5, 0.2);
         ctx.fillStyle = "#704a20";
         ctx.fillRect(Math.round(chest.x) - 16, Math.round(chest.y) - 14, 32, 24);
         ctx.fillStyle = "#e2b76a";
@@ -4199,8 +4549,8 @@ export function KnightBattleGame() {
         const panelY = Math.round(clamp(chest.y - 132, 140, FLOOR_Y - 146));
         const weaponHitsLeft = chestHitsLeftForWeapon(chest, state.player.weapon);
         const abilityChestGroups: AbilityKind[][] = [
-          ["fireball", "spike_trap", "dash_strike", "heal_pulse"],
-          ["freeze_blast", "turret_droid", "shield_bubble", "coin_magnet"]
+          ["fireball", "spike_trap", "poison_trap", "dash_strike", "heal_pulse", "auto_regen"],
+          ["freeze_blast", "turret_droid", "shield_bubble", "coin_magnet", "double_attack", "double_strength", "fortify"]
         ];
         const abilityChestLines = abilityChestGroups.map((line) =>
           line
@@ -4232,6 +4582,7 @@ export function KnightBattleGame() {
         const chestRuleLineTwo = [
           isWeaponUnlocked(state.player, "heavy_blaster") ? "Heavy 5" : null,
           isWeaponUnlocked(state.player, "ion_blaster") ? "Ion 5" : null,
+          isWeaponUnlocked(state.player, "dual_pistol") ? "Dual 5" : null,
           isWeaponUnlocked(state.player, "lightsaber_gun") ? "LS Gun 5" : null,
           state.player.fireballLevel > 0 ? "Fireball 2" : null
         ]
@@ -4251,15 +4602,18 @@ export function KnightBattleGame() {
       }
 
       for (const trap of state.spikeTraps) {
-        ctx.fillStyle = "#1e293b";
+        const poisonTrap = (trap.poisonDuration ?? 0) > 0;
+        drawGroundShadow(ctx, trap.x, trap.y + 10, trap.w / 2 - 8, 4, 0.14);
+        ctx.fillStyle = poisonTrap ? "#214730" : "#1e293b";
         ctx.fillRect(Math.round(trap.x - trap.w / 2), Math.round(trap.y), trap.w, 8);
-        ctx.fillStyle = "#d7e0ef";
+        ctx.fillStyle = poisonTrap ? "#7ee38b" : "#d7e0ef";
         for (let spikeX = trap.x - trap.w / 2 + 6; spikeX < trap.x + trap.w / 2; spikeX += 12) {
           ctx.fillRect(Math.round(spikeX), Math.round(trap.y - 8), 6, 14);
         }
       }
 
       for (const turret of state.turrets) {
+        drawGroundShadow(ctx, turret.x, turret.y + 28, 16, 4, 0.18);
         ctx.fillStyle = "#23324c";
         ctx.fillRect(Math.round(turret.x - 12), Math.round(turret.y), 24, 26);
         ctx.fillStyle = "#8bd3ff";
@@ -4301,11 +4655,11 @@ export function KnightBattleGame() {
         ctx.globalAlpha = 1;
       }
 
-      ctx.fillStyle = "#111827";
-      ctx.fillRect(18, 18, 360, 150);
-      ctx.strokeStyle = "#6f86bb";
-      ctx.lineWidth = 4;
-      ctx.strokeRect(18, 18, 360, 150);
+      drawBeveledPanel(ctx, 18, 18, 360, 150, "#111827", "#3f5a81", "#050b13");
+      ctx.fillStyle = "rgba(255,255,255,0.06)";
+      ctx.fillRect(24, 24, 348, 24);
+      ctx.fillStyle = "rgba(0,0,0,0.18)";
+      ctx.fillRect(24, 132, 348, 26);
 
       ctx.fillStyle = "#f4f7fb";
       ctx.font = '18px "Courier New", monospace';
@@ -4656,12 +5010,17 @@ export function KnightBattleGame() {
   const unlockedAbilityControls = [
     stateRef.current.player.fireballLevel > 0 ? "Up: Fireball" : null,
     stateRef.current.player.spikeTrapLevel > 0 ? "Down: Spike Trap" : null,
+    stateRef.current.player.poisonTrapLevel > 0 ? "V: Poison Trap" : null,
     stateRef.current.player.dashStrikeLevel > 0 ? "Shift + Arrow: Dash Strike" : null,
     stateRef.current.player.healPulseLevel > 0 ? "H: Heal Pulse" : null,
     stateRef.current.player.freezeBlastLevel > 0 ? "F + Arrow: Freeze Blast" : null,
     stateRef.current.player.turretDroidLevel > 0 ? "T: Turret Droid" : null,
     stateRef.current.player.shieldBubbleLevel > 0 ? "Hold E: Shield Bubble" : null,
-    stateRef.current.player.coinMagnetLevel > 0 ? "M: Coin Magnet" : null
+    stateRef.current.player.coinMagnetLevel > 0 ? "M: Coin Magnet" : null,
+    stateRef.current.player.autoRegenLevel > 0 ? "Passive: Auto Regeneration" : null,
+    stateRef.current.player.doubleAttackLevel > 0 ? "Passive: Double Attack" : null,
+    stateRef.current.player.doubleStrengthLevel > 0 ? "Passive: Double Strength" : null,
+    stateRef.current.player.fortifyLevel > 0 ? "Passive: Fortify" : null
   ].filter((control): control is string => Boolean(control));
   const heroLabel = selectedCharacter
     ? `${selectedCharacter} (${playerName || "Pilot"})`
@@ -5332,7 +5691,11 @@ export function KnightBattleGame() {
                       }}
                     >
                       <strong>{abilityLabel(ability)}</strong>
-                      <span>{abilityDescription(ability)}</span>
+                      <span>
+                        {abilityLevel(stateRef.current.player, ability) > 0 || discoveredAbilities.includes(ability)
+                          ? abilityDescription(ability)
+                          : "Not unlocked"}
+                      </span>
                     </button>
                   ))}
                 </div>
@@ -5769,7 +6132,7 @@ export function KnightBattleGame() {
                   <p className="shopKicker">Instructions</p>
                   <h2>Quick Controls</h2>
                   <p className="shopCopy">
-                    Arrows move. Space attacks. D equips lightsaber, A equips blaster, Q cycles weapons.
+                    Arrows move. Space attacks. D equips lightsaber, A equips blaster, C equips Dual Pistol, and Q cycles weapons.
                     Hit chests, solve the math, then choose an ability or rare weapon. Press Play to start each level.
                     Food gives up to 8 temporary bonus hearts that disappear after damage.
                   </p>
@@ -5852,6 +6215,12 @@ export function KnightBattleGame() {
                 <strong>R</strong> Lightsaber Gun
               </>
             ) : null}
+            {isWeaponUnlocked(stateRef.current.player, "dual_pistol") ? (
+              <>
+                {" | "}
+                <strong>C</strong> Dual Pistol
+              </>
+            ) : null}
           </p>
           {unlockedAbilityControls.length > 0 ? (
             <p>Unlocked Abilities: {unlockedAbilityControls.join(" | ")}</p>
@@ -5860,6 +6229,8 @@ export function KnightBattleGame() {
           )}
           {stateRef.current.player.weapon === "lightsaber_gun" ? (
             <p>Lightsaber Gun Controls: <strong>Q</strong> slash | <strong>W</strong> shoot | <strong>R</strong> equip</p>
+          ) : stateRef.current.player.weapon === "dual_pistol" ? (
+            <p>Dual Pistol Controls: <strong>C</strong> equip | shoots two nearby droids at once.</p>
           ) : null}
           {mathError ? <p className="menuError">{mathError}</p> : null}
           <p>
@@ -5912,10 +6283,10 @@ export function KnightBattleGame() {
             <h2>Survive, Upgrade, And Build Your Troop Squad</h2>
             <p className="shopCopy">
               Move with Arrow Keys. Press Space to attack. Press D for lightsaber
-              and A for blaster. Chests spawn every 10-20 seconds; hit a chest
+              and A for blaster. Rare weapons like Dual Pistol can add extra equip buttons such as C. Chests spawn every 10-20 seconds; hit a chest
               then use math to open it. Answer correctly to choose an ability like Fireball, Spike Trap, Dash Strike,
-              Heal Pulse, Freeze Blast, Turret Droid, Shield Bubble, or Coin
-              Magnet, or rarely unlock a new weapon. A wrong answer releases a battle droid.
+              Poison Trap, Heal Pulse, Freeze Blast, Turret Droid, Shield Bubble, Double Attack, Double Strength, or Coin
+              Magnet, Auto Regeneration, or Fortify, or rarely unlock a new weapon. A wrong answer releases a battle droid.
               Picking the same ability again makes it stronger. Each
               level has 5 waves. The game pauses at the start of every new
               level so you can shop, then press Play to start fighting. Waves
