@@ -39,6 +39,8 @@ const SHOP_COSTS = {
   sniper: 32,
   cloneCommander: 500,
   medicClone: 500,
+  padawan: 500,
+  supportDrop: 200,
   playerShield: 20,
   troopShield: 20,
   food: 6
@@ -118,8 +120,10 @@ type AllyKind =
   | "archer"
   | "shieldsman"
   | "sniper"
+  | "phase1_clone"
   | "clone_commander"
-  | "medic_clone";
+  | "medic_clone"
+  | "padawan";
 type ScreenState = "menu" | "playing" | "gameover";
 type AuthView = "welcome" | "signin" | "signup" | "character";
 type MenuView = "main" | "howToPlay" | "permanentShop" | "highScore" | "settings";
@@ -208,7 +212,15 @@ type Ally = {
   speedLevel: number;
   permanentId?: string;
   specialCooldown?: number;
-  weaponMode?: "dual" | "blaster";
+  weaponMode?:
+    | "dual"
+    | "heavy_blaster"
+    | "blaster"
+    | "pistol"
+    | "dagger"
+    | "lightsaber"
+    | "double_lightsaber"
+    | "lightsaber_gun";
 };
 
 type Coin = {
@@ -227,6 +239,18 @@ type Chest = {
   hitsLeft: number;
   progress: number;
   hitByAttack: number;
+};
+
+type SupportDrop = {
+  id: number;
+  x: number;
+  y: number;
+  targetY: number;
+  phase: "descending" | "landing" | "ascending";
+  timer: number;
+  cloneCount: number;
+  spawned: boolean;
+  impactRadius: number;
 };
 
 type Projectile = {
@@ -338,6 +362,8 @@ type Player = {
   coinMagnetCooldown: number;
   coinMagnetTimer: number;
   autoRegenTimer: number;
+  dualPistolFollowupTimer: number;
+  dualPistolFollowupShots: number;
 };
 
 type GameState = {
@@ -346,6 +372,7 @@ type GameState = {
   allies: Ally[];
   coins: Coin[];
   chests: Chest[];
+  supportDrops: SupportDrop[];
   projectiles: Projectile[];
   spikeTraps: SpikeTrap[];
   turrets: Turret[];
@@ -366,6 +393,7 @@ type GameState = {
   nextAllyId: number;
   nextCoinId: number;
   nextChestId: number;
+  nextSupportDropId: number;
   nextProjectileId: number;
   nextTrapId: number;
   nextTurretId: number;
@@ -381,6 +409,10 @@ type HudState = {
   goldCoins: number;
   kills: number;
   enemyCount: number;
+  battleDroidCount: number;
+  superBattleDroidCount: number;
+  droidekaCount: number;
+  commandoDroidCount: number;
   waveLabel: string;
   squireCount: number;
   archerCount: number;
@@ -562,7 +594,7 @@ function weaponLabel(weapon: WeaponType) {
 }
 
 function weaponDescription(weapon: WeaponType) {
-  if (weapon === "dual_pistol") return "Twin blasters that can hit two droids at once. Opens chests in 5 shots.";
+  if (weapon === "dual_pistol") return "Twin blasters where both shots deal 50% damage, and the second shot fires automatically a moment later. Opens chests in 5 shots.";
   if (weapon === "lightsaber_gun") return "A hybrid weapon that shoots blasts and can slash up close with Q. Opens chests in 5 hits.";
   if (weapon === "heavy_blaster") return "Long range, heavy damage, and opens chests in 5 shots.";
   if (weapon === "double_lightsaber") return "Wide melee swings that can hit more enemies up close. Opens chests in 1 hit.";
@@ -637,6 +669,8 @@ function troopName(id: number) {
 }
 
 function troopLabel(kind: AllyKind) {
+  if (kind === "phase1_clone") return "Phase 1 Clone";
+  if (kind === "padawan") return "Padawan";
   if (kind === "clone_commander") return "Clone Commander";
   if (kind === "medic_clone") return "Medic Clone";
   if (kind === "archer") return "501st Clone Trooper";
@@ -646,7 +680,25 @@ function troopLabel(kind: AllyKind) {
 }
 
 function isSpecialHeroTroop(kind: AllyKind) {
-  return kind === "clone_commander" || kind === "medic_clone";
+  return kind === "clone_commander" || kind === "medic_clone" || kind === "padawan";
+}
+
+function bestPadawanWeapon(player: Player): "lightsaber" | "double_lightsaber" | "lightsaber_gun" {
+  if (isWeaponUnlocked(player, "double_lightsaber")) return "double_lightsaber";
+  if (isWeaponUnlocked(player, "lightsaber_gun")) return "lightsaber_gun";
+  return "lightsaber";
+}
+
+function troopUsesDaggerAgainstDroideka(ally: Ally, target: Enemy) {
+  return ally.kind !== "padawan" && target.kind === "droideka" && !target.rolling;
+}
+
+function supportDropTargetX(state: GameState) {
+  if (state.enemies.length === 0) return WIDTH / 2;
+  const target = state.enemies
+    .slice()
+    .sort((a, b) => strongestEnemySort(a, b) || Math.abs(a.x - WIDTH / 2) - Math.abs(b.x - WIDTH / 2))[0];
+  return clamp(target.x + target.w / 2, 90, WIDTH - 90);
 }
 
 function upgradeCost(ally: Ally, upgrade: "health" | "range" | "speed") {
@@ -1017,12 +1069,15 @@ function makeInitialState(): GameState {
       shieldBubbleTimer: 0,
       coinMagnetCooldown: 0,
       coinMagnetTimer: 0,
-      autoRegenTimer: 0
+      autoRegenTimer: 0,
+      dualPistolFollowupTimer: 0,
+      dualPistolFollowupShots: 0
     },
     enemies: [],
     allies: [],
     coins: [],
     chests: [],
+    supportDrops: [],
     projectiles: [],
     spikeTraps: [],
     turrets: [],
@@ -1043,6 +1098,7 @@ function makeInitialState(): GameState {
     nextAllyId: 1,
     nextCoinId: 1,
     nextChestId: 1,
+    nextSupportDropId: 1,
     nextProjectileId: 1,
     nextTrapId: 1,
     nextTurretId: 1,
@@ -1061,6 +1117,10 @@ function makeHudState(state: GameState): HudState {
     goldCoins: wallet.gold,
     kills: state.player.kills,
     enemyCount: state.enemies.length,
+    battleDroidCount: state.enemies.filter((enemy) => enemy.kind === "scout").length,
+    superBattleDroidCount: state.enemies.filter((enemy) => enemy.kind === "brute").length,
+    droidekaCount: state.enemies.filter((enemy) => enemy.kind === "droideka").length,
+    commandoDroidCount: state.enemies.filter((enemy) => enemy.kind === "commando").length,
     waveLabel: rankLabel(state.player.score),
     squireCount: state.allies.filter((ally) => ally.kind === "squire").length,
     archerCount: state.allies.filter((ally) => ally.kind === "archer").length,
@@ -1628,6 +1688,108 @@ function useSpecialTroopAbility(state: GameState, ally: Ally, target: Enemy | nu
     }
   }
 
+  if (ally.kind === "padawan") {
+    const friendlyAllies =
+      state.level === 66
+        ? state.allies.filter((candidate) => candidate.kind === "padawan")
+        : state.allies;
+    if (player.healPulseLevel > 0) {
+      const someoneNeedsHealing =
+        player.health < player.maxHealth || friendlyAllies.some((candidate) => candidate.health < candidate.maxHealth);
+      if (someoneNeedsHealing) {
+        const heal = 1 + Math.floor(player.healPulseLevel / 2);
+        player.health = Math.min(player.maxHealth, player.health + heal);
+        ally.health = Math.min(ally.maxHealth, ally.health + heal);
+        for (const candidate of friendlyAllies) {
+          candidate.health = Math.min(candidate.maxHealth, candidate.health + heal);
+        }
+        ally.specialCooldown = 5.8;
+        spawnParticleBurst(state, centerX, targetY, 12, "#79f2a6");
+        return true;
+      }
+    }
+
+    if (
+      player.shieldBubbleLevel > 0 &&
+      (player.health <= player.maxHealth * 0.5 || ally.health <= ally.maxHealth * 0.5)
+    ) {
+      player.shieldBubbleTimer = Math.max(player.shieldBubbleTimer, 1.2);
+      for (const candidate of friendlyAllies) {
+        candidate.shieldPattern = true;
+        candidate.hitsTaken = candidate.hitsTaken ?? 0;
+      }
+      ally.specialCooldown = 6.5;
+      spawnParticleBurst(state, centerX, ally.y + 22, 14, "#a7d8ff");
+      return true;
+    }
+
+    if (target && player.poisonTrapLevel > 0 && Math.abs(target.x - ally.x) < 180) {
+      const trapWidth = 52 + player.poisonTrapLevel * 8;
+      const direction = target.x >= ally.x ? 1 : -1;
+      const trapX = clamp(target.x + target.w / 2 + direction * 10, trapWidth / 2 + 20, WIDTH - trapWidth / 2 - 20);
+      state.spikeTraps.push({
+        id: state.nextTrapId++,
+        x: trapX,
+        y: FLOOR_Y - 16,
+        w: trapWidth,
+        h: 18,
+        damage: (1 + player.poisonTrapLevel) * player.damageMultiplier,
+        armTimer: 0.35,
+        hitIds: [],
+        poisonDamage: 0.4 + player.poisonTrapLevel * 0.25,
+        poisonDuration: 2.4 + player.poisonTrapLevel * 0.6,
+        slowDuration: 1.8 + player.poisonTrapLevel * 0.45
+      });
+      ally.specialCooldown = 4.2;
+      spawnParticleBurst(state, trapX, FLOOR_Y - 14, 8, "#7ee38b");
+      return true;
+    }
+
+    if (target && player.spikeTrapLevel > 0 && Math.abs(target.x - ally.x) < 170) {
+      const trapWidth = 52 + player.spikeTrapLevel * 8;
+      const direction = target.x >= ally.x ? 1 : -1;
+      const trapX = clamp(target.x + target.w / 2 + direction * 10, trapWidth / 2 + 20, WIDTH - trapWidth / 2 - 20);
+      state.spikeTraps.push({
+        id: state.nextTrapId++,
+        x: trapX,
+        y: FLOOR_Y - 16,
+        w: trapWidth,
+        h: 18,
+        damage: (1 + player.spikeTrapLevel) * player.damageMultiplier,
+        armTimer: 0.35,
+        hitIds: [],
+        poisonDamage: 0,
+        poisonDuration: 0,
+        slowDuration: 0
+      });
+      ally.specialCooldown = 3.8;
+      spawnParticleBurst(state, trapX, FLOOR_Y - 14, 7, "#d7e0ef");
+      return true;
+    }
+
+    if (target && player.freezeBlastLevel > 0 && Math.abs(target.x - ally.x) <= 280) {
+      target.slowTimer = Math.max(target.slowTimer ?? 0, 2 + player.freezeBlastLevel * 0.35);
+      ally.specialCooldown = 4.4;
+      spawnParticleBurst(state, target.x + target.w / 2, target.y + 18, 12, "#9fe7ff");
+      return true;
+    }
+
+    if (player.turretDroidLevel > 0 && state.turrets.length < 2) {
+      state.turrets.push({
+        id: state.nextTurretId++,
+        x: centerX,
+        y: FLOOR_Y - 42,
+        life: 4.5 + player.turretDroidLevel,
+        damage: (1 + Math.floor(player.turretDroidLevel / 2)) * player.damageMultiplier,
+        range: 240 + player.turretDroidLevel * 18,
+        cooldown: 0.2
+      });
+      ally.specialCooldown = 6.2;
+      spawnParticleBurst(state, centerX, FLOOR_Y - 42, 10, "#b5e2ff");
+      return true;
+    }
+  }
+
   if (
     player.fireballLevel > 0 &&
     target &&
@@ -1679,7 +1841,16 @@ function addAlly(state: GameState, kind: AllyKind) {
     rangeLevel: 0,
     speedLevel: 0,
     specialCooldown: 0,
-    weaponMode: "dual" as "dual" | "blaster"
+    weaponMode:
+      "dual" as
+        | "dual"
+        | "heavy_blaster"
+        | "blaster"
+        | "pistol"
+        | "dagger"
+        | "lightsaber"
+        | "double_lightsaber"
+        | "lightsaber_gun"
   };
   const ally: Ally =
     kind === "clone_commander"
@@ -1712,6 +1883,37 @@ function addAlly(state: GameState, kind: AllyKind) {
             color: "#86d3c9",
             cost: SHOP_COSTS.medicClone
           }
+        : kind === "padawan"
+          ? {
+              ...base,
+              y: FLOOR_Y - 64,
+              w: 30,
+              h: 64,
+              speed: 106,
+              health: Math.max(1, state.player.maxHealth - 2),
+              maxHealth: Math.max(1, state.player.maxHealth - 2),
+              damage: 3.25,
+              attackRange: 54,
+              attackCooldown: 0.82,
+              color: "#c79cff",
+              cost: SHOP_COSTS.padawan
+            }
+        : kind === "phase1_clone"
+          ? {
+              ...base,
+              y: FLOOR_Y - 58,
+              w: 24,
+              h: 58,
+              speed: 96,
+              health: 3,
+              maxHealth: 3,
+              damage: 1.25,
+              attackRange: 145,
+              attackCooldown: 1.22,
+              color: "#bfd9ff",
+              cost: 0,
+              weaponMode: "blaster"
+            }
       : kind === "archer"
       ? {
           ...base,
@@ -1774,6 +1976,15 @@ function addAlly(state: GameState, kind: AllyKind) {
 
   state.allies.push(ally);
   spawnParticleBurst(state, ally.x + ally.w / 2, ally.y + 12, 8, "#b5e2ff");
+}
+
+function spawnSupportDropClones(state: GameState, x: number, cloneCount: number) {
+  for (let index = 0; index < cloneCount; index += 1) {
+    addAlly(state, "phase1_clone");
+    const ally = state.allies[state.allies.length - 1];
+    ally.x = clamp(x - 40 + index * 18, 48, WIDTH - ally.w - 48);
+    ally.facing = Math.random() < 0.5 ? 1 : -1;
+  }
 }
 
 function applyPermanentShop(state: GameState, shop: PermanentShop) {
@@ -2309,12 +2520,16 @@ function drawAlly(
   const y = Math.round(ally.y);
   drawGroundShadow(ctx, x + ally.w / 2, y + ally.h + 2, 18, 5, 0.2);
   const marking =
-    ally.kind === "clone_commander"
+    ally.kind === "padawan"
+      ? "#7c5dca"
+      : ally.kind === "clone_commander"
       ? "#3d7de0"
       : ally.kind === "medic_clone"
         ? "#4fb89d"
         : ally.kind === "sniper"
           ? "#101827"
+          : ally.kind === "phase1_clone"
+            ? "#4d8fdd"
           : ally.kind === "archer"
             ? "#2f6fd6"
             : ally.kind === "shieldsman"
@@ -2353,8 +2568,49 @@ function drawAlly(
 
   const blasterX = ally.facing === 1 ? x + ally.w - 2 : x - 18;
   ctx.fillStyle = "#1d2636";
-  if (ally.kind === "clone_commander" || ally.kind === "medic_clone") {
-    if (ally.weaponMode === "blaster") {
+  if (ally.kind === "padawan") {
+    const padawanWeapon = ally.weaponMode ?? "lightsaber";
+    const handleX = ally.facing === 1 ? x + ally.w - 2 : x - 8;
+    const bladeX = ally.facing === 1 ? handleX + 8 : handleX - 28;
+    ctx.fillStyle = "#05070b";
+    ctx.fillRect(handleX, y + 27, padawanWeapon === "double_lightsaber" ? 13 : 9, 5);
+    if (padawanWeapon === "lightsaber_gun") {
+      ctx.fillStyle = "#8f6cff";
+      ctx.fillRect(ally.facing === 1 ? handleX - 16 : handleX + 14, y + 28, 16, 2);
+      ctx.fillStyle = "#58657e";
+      ctx.fillRect(handleX - 1, y + 26, 22, 7);
+      ctx.fillStyle = "rgba(255,255,255,0.72)";
+      ctx.fillRect(ally.facing === 1 ? handleX - 10 : handleX + 18, y + 29, 8, 1);
+    } else {
+      ctx.fillStyle = "#8f6cff";
+      ctx.fillRect(bladeX, y + 26, padawanWeapon === "double_lightsaber" ? 40 : 30, 3);
+      if (padawanWeapon === "double_lightsaber") {
+        ctx.fillRect(ally.facing === 1 ? handleX - 30 : handleX + 13, y + 29, 30, 3);
+      }
+      ctx.fillStyle = "rgba(255,255,255,0.72)";
+      ctx.fillRect(
+        ally.facing === 1 ? bladeX + 4 : bladeX + 8,
+        y + 27,
+        padawanWeapon === "double_lightsaber" ? 22 : 16,
+        1
+      );
+    }
+  } else if (ally.kind === "clone_commander" || ally.kind === "medic_clone") {
+    if (ally.weaponMode === "dagger") {
+      const daggerX = ally.facing === 1 ? x + ally.w - 1 : x - 10;
+      ctx.fillStyle = "#10141c";
+      ctx.fillRect(daggerX, y + 26, 8, 4);
+      ctx.fillStyle = "#d7e3f2";
+      ctx.fillRect(ally.facing === 1 ? daggerX + 7 : daggerX - 14, y + 27, 14, 2);
+      ctx.fillStyle = "#91a4bf";
+      ctx.fillRect(ally.facing === 1 ? daggerX + 11 : daggerX - 10, y + 27, 4, 1);
+    } else if (ally.kind === "clone_commander" && ally.weaponMode === "heavy_blaster") {
+      ctx.fillRect(blasterX - 3, y + 24, 28, 8);
+      ctx.fillStyle = "#ffb056";
+      ctx.fillRect(ally.facing === 1 ? blasterX + 20 : blasterX - 6, y + 26, 10, 3);
+      ctx.fillStyle = "#8a5b32";
+      ctx.fillRect(blasterX + 5, y + 25, 8, 3);
+    } else if (ally.weaponMode === "blaster") {
       ctx.fillRect(blasterX - 2, y + 25, 24, 7);
       ctx.fillStyle = ally.kind === "medic_clone" ? "#8de7d0" : "#8fc8ff";
       ctx.fillRect(ally.facing === 1 ? blasterX + 18 : blasterX - 6, y + 27, 8, 3);
@@ -2366,9 +2622,23 @@ function drawAlly(
       ctx.fillRect(ally.facing === 1 ? blasterX + 16 : blasterX + 4, y + 31, 4, 2);
     }
   } else {
+    if (ally.weaponMode === "dagger") {
+      const daggerX = ally.facing === 1 ? x + ally.w - 2 : x - 9;
+      ctx.fillStyle = "#10141c";
+      ctx.fillRect(daggerX, y + 27, 7, 4);
+      ctx.fillStyle = "#d7e3f2";
+      ctx.fillRect(ally.facing === 1 ? daggerX + 6 : daggerX - 12, y + 28, 12, 2);
+    } else if (ally.weaponMode === "pistol") {
+      ctx.fillRect(blasterX - 1, y + 25, 12, 6);
+      ctx.fillStyle = "#ff9680";
+      ctx.fillRect(ally.facing === 1 ? blasterX + 8 : blasterX - 4, y + 27, 5, 2);
+      ctx.fillStyle = "#6d7b90";
+      ctx.fillRect(blasterX + 3, y + 31, 4, 5);
+    } else {
     ctx.fillRect(blasterX, y + 26, 20, 6);
     ctx.fillStyle = "#7f8da6";
     ctx.fillRect(ally.facing === 1 ? blasterX + 16 : blasterX - 6, y + 27, 8, 3);
+    }
   }
 
   if (ally.kind === "medic_clone") {
@@ -2383,7 +2653,13 @@ function drawAlly(
 
   if (ally.attackWindup > 0.06) {
     ctx.fillStyle =
-      ally.kind === "archer" ? "rgba(80, 160, 255, 0.55)" : "rgba(128, 183, 255, 0.5)";
+      ally.kind === "padawan"
+        ? "rgba(143, 108, 255, 0.45)"
+        : ally.kind === "phase1_clone"
+          ? "rgba(110, 182, 255, 0.45)"
+        : ally.kind === "archer"
+          ? "rgba(80, 160, 255, 0.55)"
+          : "rgba(128, 183, 255, 0.5)";
     ctx.fillRect(x - 4, y + 16, ally.kind === "archer" ? ally.w + 40 : ally.w + 18, 8);
   }
 
@@ -2399,13 +2675,15 @@ function drawAlly(
 }
 
 function drawBackground(ctx: CanvasRenderingContext2D, tick: number, enemyCount: number) {
-  ctx.fillStyle = "#18213a";
+  ctx.fillStyle = "#5b3422";
   ctx.fillRect(0, 0, WIDTH, HEIGHT);
 
-  ctx.fillStyle = "#24365f";
+  ctx.fillStyle = "#8b4f2a";
   ctx.fillRect(0, 0, WIDTH, 150);
-  ctx.fillStyle = "#3f5b8f";
+  ctx.fillStyle = "#b96d35";
   ctx.fillRect(0, 150, WIDTH, 90);
+  ctx.fillStyle = "#d58a47";
+  ctx.fillRect(0, 240, WIDTH, 70);
 
   ctx.fillStyle = "#e5a661";
   ctx.fillRect(710, 52, 88, 88);
@@ -2424,35 +2702,136 @@ function drawBackground(ctx: CanvasRenderingContext2D, tick: number, enemyCount:
   ctx.fillText(String(enemyCount), 754, 108);
   ctx.textAlign = "left";
 
-  ctx.fillStyle = "#2b3155";
+  ctx.fillStyle = "#704022";
   for (let index = 0; index < 8; index += 1) {
-    const baseX = index * 140 - ((tick * 8) % 140);
+    const baseX = index * 150 - ((tick * 8) % 150);
     ctx.beginPath();
-    ctx.moveTo(baseX, 260);
-    ctx.lineTo(baseX + 46, 210);
-    ctx.lineTo(baseX + 96, 260);
+    ctx.moveTo(baseX, 282);
+    ctx.lineTo(baseX + 28, 238);
+    ctx.lineTo(baseX + 52, 214);
+    ctx.lineTo(baseX + 90, 286);
     ctx.fill();
   }
 
-  ctx.fillStyle = "#31456f";
+  ctx.fillStyle = "#8a4f28";
   for (let index = 0; index < 7; index += 1) {
-    const baseX = index * 160 - ((tick * 14) % 160);
+    const baseX = index * 168 - ((tick * 14) % 168);
     ctx.beginPath();
-    ctx.moveTo(baseX, 300);
-    ctx.lineTo(baseX + 52, 240);
-    ctx.lineTo(baseX + 120, 300);
+    ctx.moveTo(baseX, 324);
+    ctx.lineTo(baseX + 36, 268);
+    ctx.lineTo(baseX + 80, 230);
+    ctx.lineTo(baseX + 122, 324);
     ctx.fill();
   }
 
-  ctx.fillStyle = "#456d34";
-  ctx.fillRect(0, FLOOR_Y, WIDTH, HEIGHT - FLOOR_Y);
-  ctx.fillStyle = "#5f9348";
-  for (let x = 0; x < WIDTH; x += 24) {
-    ctx.fillRect(x, FLOOR_Y, 12, 8);
+  for (let index = 0; index < 3; index += 1) {
+    const shipX = 90 + index * 250 - ((tick * 18) % 250);
+    const shipY = 176 + (index % 2) * 18;
+    ctx.fillStyle = "#6f4b38";
+    ctx.fillRect(shipX, shipY, 54, 12);
+    ctx.fillRect(shipX + 10, shipY - 8, 22, 8);
+    ctx.fillRect(shipX + 36, shipY + 2, 10, 6);
+    ctx.fillStyle = "#cdb39a";
+    ctx.fillRect(shipX + 8, shipY + 3, 14, 2);
+    ctx.fillRect(shipX + 26, shipY + 3, 10, 2);
+    ctx.fillStyle = "#9fd0ff";
+    ctx.fillRect(shipX + 12, shipY - 5, 8, 3);
+
+    for (let trooper = 0; trooper < 3; trooper += 1) {
+      const dropX = shipX + 10 + trooper * 12;
+      const dropY = shipY + 18 + ((tick * 30 + trooper * 18) % 74);
+      ctx.fillStyle = "#f0f4fa";
+      ctx.fillRect(dropX, dropY, 4, 8);
+      ctx.fillStyle = "#6fb6ff";
+      ctx.fillRect(dropX, dropY + 2, 4, 2);
+      ctx.fillStyle = "#f0f4fa";
+      ctx.fillRect(dropX + 1, dropY - 3, 2, 3);
+      ctx.fillStyle = "rgba(255, 224, 170, 0.55)";
+      ctx.fillRect(dropX + 1, dropY - 9, 2, 5);
+    }
   }
-  ctx.fillStyle = "#7ea85c";
-  for (let x = 6; x < WIDTH; x += 28) {
-    ctx.fillRect(x, FLOOR_Y + 18, 6, 24);
+
+  ctx.fillStyle = "#486c3d";
+  ctx.fillRect(168, 172, 4, 8);
+  ctx.fillRect(166, 176, 8, 3);
+  ctx.fillStyle = "#d7d2b8";
+  ctx.fillRect(167, 169, 6, 3);
+  ctx.fillStyle = "#6c4d2e";
+  ctx.fillRect(169, 180, 2, 6);
+  ctx.fillRect(165, 180, 2, 4);
+  ctx.fillRect(173, 180, 2, 4);
+
+  ctx.fillStyle = "#5f3a24";
+  for (let index = 0; index < 8; index += 1) {
+    const droidX = index * 110 - ((tick * 22) % 110);
+    const droidY = 316 + (index % 2) * 6;
+    ctx.fillRect(droidX, droidY, 4, 12);
+    ctx.fillRect(droidX - 2, droidY + 3, 8, 2);
+    ctx.fillRect(droidX + 1, droidY - 5, 2, 5);
+    ctx.fillRect(droidX - 2, droidY + 12, 2, 7);
+    ctx.fillRect(droidX + 4, droidY + 12, 2, 7);
+  }
+
+  for (let index = 0; index < 3; index += 1) {
+    const fightX = 120 + index * 240 - ((tick * 10) % 120);
+    const fightY = 334 + (index % 2) * 8;
+    const saberPulse = Math.sin(tick * 4 + index) * 4;
+
+    ctx.fillStyle = "#efe7d7";
+    ctx.fillRect(fightX, fightY, 4, 11);
+    ctx.fillRect(fightX - 2, fightY + 4, 8, 2);
+    ctx.fillRect(fightX + 1, fightY - 4, 2, 4);
+    ctx.fillStyle = index === 1 ? "#b47cff" : "#8fd4ff";
+    ctx.fillRect(fightX + 3, fightY + 2, 14 + Math.round(saberPulse), 2);
+
+    ctx.fillStyle = "#5f3a24";
+    ctx.fillRect(fightX + 24, fightY + 1, 4, 11);
+    ctx.fillRect(fightX + 22, fightY + 5, 8, 2);
+    ctx.fillRect(fightX + 25, fightY - 4, 2, 4);
+    ctx.fillRect(fightX + 23, fightY + 12, 2, 7);
+    ctx.fillRect(fightX + 27, fightY + 12, 2, 7);
+  }
+
+  const jangoX = 534 + Math.sin(tick * 1.2) * 5;
+  const maceX = 498 + Math.sin(tick * 1.5) * 4;
+  const duelY = 326;
+  ctx.fillStyle = "#d6dbe5";
+  ctx.fillRect(jangoX, duelY, 5, 12);
+  ctx.fillRect(jangoX - 2, duelY + 4, 9, 2);
+  ctx.fillRect(jangoX + 1, duelY - 4, 3, 4);
+  ctx.fillStyle = "#7fb6ff";
+  ctx.fillRect(jangoX - 8, duelY + 2, 8, 2);
+  ctx.fillRect(jangoX + 5, duelY + 2, 8, 2);
+
+  ctx.fillStyle = "#241629";
+  ctx.fillRect(maceX, duelY, 5, 12);
+  ctx.fillRect(maceX - 2, duelY + 4, 8, 2);
+  ctx.fillRect(maceX + 1, duelY - 4, 2, 4);
+  ctx.fillStyle = "#b47cff";
+  ctx.fillRect(maceX + 4, duelY + 2, 18, 2);
+  ctx.fillStyle = "rgba(180, 124, 255, 0.45)";
+  ctx.fillRect(maceX + 6, duelY + 1, 14, 4);
+
+  ctx.fillStyle = "#50311f";
+  for (let index = 0; index < 5; index += 1) {
+    const pillarX = 90 + index * 180 - ((tick * 5) % 90);
+    ctx.fillRect(pillarX, 214, 18, 138);
+    ctx.fillRect(pillarX - 8, 206, 34, 14);
+  }
+
+  ctx.fillStyle = "#bf6d32";
+  ctx.fillRect(0, FLOOR_Y, WIDTH, HEIGHT - FLOOR_Y);
+  ctx.fillStyle = "#d48845";
+  for (let x = 0; x < WIDTH; x += 26) {
+    ctx.fillRect(x, FLOOR_Y + ((x / 26) % 2 === 0 ? 2 : 0), 14, 7);
+  }
+  ctx.fillStyle = "#9d5b2e";
+  for (let x = 6; x < WIDTH; x += 34) {
+    ctx.fillRect(x, FLOOR_Y + 16, 8, 18);
+  }
+  ctx.fillStyle = "#e5a15f";
+  for (let x = 18; x < WIDTH; x += 46) {
+    ctx.fillRect(x, FLOOR_Y + 30, 10, 5);
   }
 }
 
@@ -2843,6 +3222,8 @@ export function KnightBattleGame() {
   const [questsOpen, setQuestsOpen] = useState(false);
   const [rewardsOpen, setRewardsOpen] = useState(false);
   const [runSavesOpen, setRunSavesOpen] = useState(false);
+  const [helpOpen, setHelpOpen] = useState(false);
+  const overlayPauseRestoreRef = useRef<boolean | null>(null);
   const [unlockedTroops, setUnlockedTroops] = useState<UnlockableTroopKind[]>(["squire"]);
   const [unlockedRareWeapons, setUnlockedRareWeapons] = useState<WeaponType[]>([]);
   const [discoveredAbilities, setDiscoveredAbilities] = useState<AbilityKind[]>([]);
@@ -3387,6 +3768,7 @@ export function KnightBattleGame() {
     setQuestMessage("");
     setShopChestMessage("");
     setRunSavesOpen(false);
+    setHelpOpen(false);
     setCurrentRunSaveSlot(null);
     setHud(makeHud(nextState));
   };
@@ -3417,6 +3799,7 @@ export function KnightBattleGame() {
     setBattleDexOpen(false);
     setQuestsOpen(false);
     setRunSavesOpen(false);
+    setHelpOpen(false);
     setUnlockedTroops(["squire"]);
     setUnlockedRareWeapons([]);
     setDiscoveredAbilities([]);
@@ -3761,6 +4144,27 @@ export function KnightBattleGame() {
   ]);
 
   useEffect(() => {
+    const autoPauseOverlayOpen = battleDexOpen || questsOpen || rewardsOpen || runSavesOpen || helpOpen;
+    if (screen !== "playing") {
+      overlayPauseRestoreRef.current = null;
+      return;
+    }
+    if (autoPauseOverlayOpen) {
+      if (overlayPauseRestoreRef.current == null) {
+        overlayPauseRestoreRef.current = paused;
+      }
+      if (!paused) {
+        setPaused(true);
+      }
+      return;
+    }
+    if (overlayPauseRestoreRef.current != null) {
+      setPaused(overlayPauseRestoreRef.current);
+      overlayPauseRestoreRef.current = null;
+    }
+  }, [battleDexOpen, helpOpen, paused, questsOpen, rewardsOpen, runSavesOpen, screen]);
+
+  useEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
 
@@ -3805,6 +4209,7 @@ export function KnightBattleGame() {
         player.coinMagnetTimer = Math.max(0, player.coinMagnetTimer - dt);
         player.poisonTrapCooldown = Math.max(0, player.poisonTrapCooldown - dt);
         player.autoRegenTimer = Math.max(0, player.autoRegenTimer - dt);
+        player.dualPistolFollowupTimer = Math.max(0, player.dualPistolFollowupTimer - dt);
         if (
           player.autoRegenLevel > 0 &&
           player.autoRegenTimer === 0 &&
@@ -3822,6 +4227,10 @@ export function KnightBattleGame() {
         }
         if (player.comboTimer === 0 && player.attackTimer === 0) {
           player.comboStep = 0;
+        }
+        if (player.weapon !== "dual_pistol") {
+          player.dualPistolFollowupShots = 0;
+          player.dualPistolFollowupTimer = 0;
         }
 
         const moveX =
@@ -3851,6 +4260,13 @@ export function KnightBattleGame() {
           hybridSlashQueuedRef.current = false;
           player.attackTimer = ATTACK_DURATION;
           player.cooldownTimer = Math.max(0.12, ATTACK_COOLDOWN - player.cooldownBonus * 0.03);
+          if (player.weapon === "dual_pistol") {
+            player.dualPistolFollowupShots = 1;
+            player.dualPistolFollowupTimer = 0.2;
+          } else {
+            player.dualPistolFollowupShots = 0;
+            player.dualPistolFollowupTimer = 0;
+          }
           player.comboStep = (player.comboStep % 3) + 1;
           player.comboTimer = 0.7;
           if (isRangedWeapon(player.weapon)) {
@@ -3862,6 +4278,27 @@ export function KnightBattleGame() {
             player.y + 28,
             5,
             "#ffe085"
+          );
+        }
+
+        if (
+          player.weapon === "dual_pistol" &&
+          player.dualPistolFollowupShots > 0 &&
+          player.dualPistolFollowupTimer === 0 &&
+          player.attackTimer === 0
+        ) {
+          player.dualPistolFollowupShots -= 1;
+          player.attackId += 1;
+          player.attackHits = 0;
+          player.attackStyle = "normal";
+          player.attackTimer = ATTACK_DURATION;
+          playSound("shoot");
+          spawnParticleBurst(
+            state,
+            player.x + (player.facing === 1 ? 40 : 0),
+            player.y + 28,
+            5,
+            "#ffb29a"
           );
         }
 
@@ -3903,6 +4340,45 @@ export function KnightBattleGame() {
           });
           state.chestTimer = CHEST_MIN_DELAY + Math.random() * CHEST_RANDOM_DELAY;
         }
+
+        state.supportDrops = state.supportDrops.filter((drop) => {
+          if (drop.phase === "descending") {
+            drop.y += 250 * dt;
+            if (drop.y >= drop.targetY) {
+              drop.y = drop.targetY;
+              drop.phase = "landing";
+              drop.timer = 0.7;
+              if (!drop.spawned) {
+                drop.spawned = true;
+                const impactBox = {
+                  x: drop.x - drop.impactRadius,
+                  y: drop.y + 12,
+                  w: drop.impactRadius * 2,
+                  h: 30
+                };
+                for (const enemy of state.enemies) {
+                  if (intersects(impactBox, enemy)) {
+                    enemy.health = 0;
+                    spawnParticleBurst(state, enemy.x + enemy.w / 2, enemy.y + enemy.h / 2, 10, "#ffb98a");
+                  }
+                }
+                spawnSupportDropClones(state, drop.x, drop.cloneCount);
+                spawnParticleBurst(state, drop.x, drop.y + 22, 16, "#d7e8ff");
+              }
+            }
+          } else if (drop.phase === "landing") {
+            drop.timer = Math.max(0, drop.timer - dt);
+            if (drop.timer === 0) {
+              drop.phase = "ascending";
+            }
+          } else {
+            drop.y -= 280 * dt;
+            if (drop.y + 70 < 0) {
+              return false;
+            }
+          }
+          return true;
+        });
 
         const hybridMeleeAttack = player.weapon === "lightsaber_gun" && player.attackStyle === "hybrid_melee";
         const slashBox =
@@ -4068,10 +4544,10 @@ export function KnightBattleGame() {
           }
         }
 
-        if ((slashBox || blasterBox) && player.attackHits < 1 + player.multiStrike + (player.weapon === "dual_pistol" ? 1 : 0)) {
+        if ((slashBox || blasterBox) && player.attackHits < 1 + player.multiStrike) {
           const playerCenterX = player.x + player.w / 2;
           const playerCenterY = player.y + player.h / 2;
-          const maxTargets = 1 + player.multiStrike + (player.weapon === "dual_pistol" ? 1 : 0);
+          const maxTargets = 1 + player.multiStrike;
           const attackTargets = state.enemies
             .filter(
               (enemy) =>
@@ -4101,7 +4577,7 @@ export function KnightBattleGame() {
                 : player.weapon === "lightsaber_gun"
                   ? player.attackStyle === "hybrid_melee" ? 4.75 : 3.25
                 : player.weapon === "dual_pistol"
-                  ? 2.75
+                  ? 1.375
                 : player.weapon === "heavy_blaster"
                   ? 3.5
                   : player.weapon === "ion_blaster"
@@ -4159,14 +4635,101 @@ export function KnightBattleGame() {
           ally.attackTimer = Math.max(0, ally.attackTimer - dt);
           ally.attackWindup = Math.max(0, ally.attackWindup - dt);
           ally.specialCooldown = Math.max(0, (ally.specialCooldown ?? 0) - dt);
+          if (ally.kind === "padawan") {
+            ally.weaponMode = bestPadawanWeapon(state.player);
+            ally.attackRange =
+              ally.weaponMode === "lightsaber_gun"
+                ? 165
+                : ally.weaponMode === "double_lightsaber"
+                  ? 68
+                  : 54;
+          }
+          const order66Active = state.level === 66;
+          const hostileToPlayer = order66Active && ally.kind !== "padawan";
+          const padawanTarget = state.allies.find((candidate) => candidate.kind === "padawan");
 
-          const targetPool =
-            ally.kind === "archer" ||
-            ally.kind === "sniper" ||
-            ally.kind === "clone_commander" ||
-            ally.kind === "medic_clone"
-              ? state.enemies.filter(canRangedTarget)
-              : state.enemies;
+          if (hostileToPlayer) {
+            const heroTargets = [
+              {
+                kind: "player" as const,
+                x: state.player.x,
+                y: state.player.y,
+                w: state.player.w,
+                h: state.player.h,
+                health: state.player.health
+              },
+              ...(padawanTarget
+                ? [
+                    {
+                      kind: "padawan" as const,
+                      x: padawanTarget.x,
+                      y: padawanTarget.y,
+                      w: padawanTarget.w,
+                      h: padawanTarget.h,
+                      health: padawanTarget.health
+                    }
+                  ]
+                : [])
+            ].filter((target) => target.health > 0);
+
+            const targetHero = heroTargets
+              .slice()
+              .sort((a, b) => Math.abs(a.x - ally.x) - Math.abs(b.x - ally.x))[0];
+
+            if (!targetHero) {
+              continue;
+            }
+
+            const distanceX = targetHero.x - ally.x;
+            const absDistanceX = Math.abs(distanceX);
+            ally.facing = distanceX >= 0 ? 1 : -1;
+            ally.guarding = false;
+            ally.guardTargetId = null;
+
+            if (ally.attackWindup === 0 && ally.attackTimer === 0) {
+              if (absDistanceX > ally.attackRange) {
+                ally.x += Math.sign(distanceX) * ally.speed * dt;
+              } else {
+                ally.attackWindup =
+                  ally.kind === "archer" ||
+                  ally.kind === "sniper" ||
+                  ally.kind === "clone_commander" ||
+                  ally.kind === "medic_clone"
+                    ? 0.28
+                    : 0.18;
+                ally.attackTimer = ally.attackCooldown;
+              }
+            }
+
+            if (ally.attackWindup > 0 && ally.attackWindup < 0.08) {
+              const rangedAttack =
+                ally.kind === "archer" ||
+                ally.kind === "sniper" ||
+                ally.kind === "clone_commander" ||
+                ally.kind === "medic_clone";
+              const damage =
+                ally.kind === "clone_commander"
+                  ? ally.damage + 1
+                  : ally.damage;
+              if (rangedAttack || (absDistanceX <= ally.attackRange + 8 && Math.abs(targetHero.y - ally.y) < 60)) {
+                if (rangedAttack) {
+                  playSound("shoot");
+                }
+                if (targetHero.kind === "player") {
+                  state.player.health -= damage;
+                  state.player.invuln = Math.max(state.player.invuln, 0.35);
+                  spawnParticleBurst(state, state.player.x + state.player.w / 2, state.player.y + 18, 6, "#ff8b6e");
+                } else if (padawanTarget) {
+                  padawanTarget.health -= damage;
+                  spawnParticleBurst(state, padawanTarget.x + padawanTarget.w / 2, padawanTarget.y + 18, 6, "#ff8b6e");
+                }
+              }
+              ally.attackWindup = 0;
+            }
+            continue;
+          }
+
+          const targetPool = state.enemies;
           let target =
             targetPool.find((enemy) => enemy.id === ally.targetId) ??
             targetPool
@@ -4189,6 +4752,54 @@ export function KnightBattleGame() {
 
           const distanceX = target.x - ally.x;
           const absDistanceX = Math.abs(distanceX);
+          const usesDagger = troopUsesDaggerAgainstDroideka(ally, target);
+          const usesPistol = (ally.kind === "squire" || ally.kind === "shieldsman") && !usesDagger;
+          const usesRangedWeapon =
+            ally.kind === "archer" ||
+            ally.kind === "sniper" ||
+            ally.kind === "phase1_clone" ||
+            ally.kind === "clone_commander" ||
+            ally.kind === "medic_clone" ||
+            (ally.kind === "padawan" && ally.weaponMode === "lightsaber_gun") ||
+            usesPistol;
+          ally.weaponMode =
+            ally.kind === "padawan"
+              ? bestPadawanWeapon(state.player)
+              : usesDagger
+                ? "dagger"
+                : usesPistol
+                  ? "pistol"
+                  : ally.kind === "clone_commander"
+                    ? target.kind === "droideka" || (target.kind === "brute" && Math.random() < 0.45)
+                      ? "heavy_blaster"
+                      : "dual"
+                    : ally.kind === "medic_clone"
+                      ? Math.abs(target.x - ally.x) > 130
+                        ? "blaster"
+                        : "dual"
+                      : ally.weaponMode;
+
+          if (ally.kind === "archer" || ally.kind === "sniper") {
+            ally.attackRange = usesDagger ? 26 : ally.kind === "sniper" ? WIDTH / 2 : 170;
+          } else if (ally.kind === "phase1_clone") {
+            ally.attackRange = usesDagger ? 26 : 145;
+          } else if (ally.kind === "squire") {
+            ally.attackRange = usesPistol ? 150 : 26;
+          } else if (ally.kind === "shieldsman") {
+            ally.attackRange = usesPistol ? 145 : 24;
+          } else if (ally.kind === "clone_commander") {
+            ally.attackRange = usesDagger ? 28 : ally.weaponMode === "heavy_blaster" ? 210 : 180;
+          } else if (ally.kind === "medic_clone") {
+            ally.attackRange = usesDagger ? 28 : 175;
+          } else if (ally.kind === "padawan") {
+            ally.attackRange =
+              ally.weaponMode === "lightsaber_gun"
+                ? 165
+                : ally.weaponMode === "double_lightsaber"
+                  ? 68
+                  : 54;
+          }
+
           if (!ally.guarding) {
             ally.facing = distanceX >= 0 ? 1 : -1;
           }
@@ -4229,10 +4840,7 @@ export function KnightBattleGame() {
               ally.x += Math.sign(distanceX) * ally.speed * dt;
             } else {
               ally.attackWindup =
-                ally.kind === "archer" ||
-                ally.kind === "sniper" ||
-                ally.kind === "clone_commander" ||
-                ally.kind === "medic_clone"
+                usesRangedWeapon
                   ? 0.28
                   : 0.18;
               ally.attackTimer = ally.attackCooldown;
@@ -4240,26 +4848,19 @@ export function KnightBattleGame() {
           }
 
           if (ally.attackWindup > 0 && ally.attackWindup < 0.08) {
-            if (
-              ally.kind === "archer" ||
-              ally.kind === "sniper" ||
-              ally.kind === "clone_commander" ||
-              ally.kind === "medic_clone"
-            ) {
-              ally.weaponMode =
-                ally.kind === "clone_commander" || ally.kind === "medic_clone"
-                  ? Math.abs(target.x - ally.x) > 130
-                    ? "blaster"
-                    : "dual"
-                  : ally.weaponMode;
+            if (usesRangedWeapon) {
               playSound("shoot");
               damageEnemy(
                 state,
                 target,
-                ally.kind === "clone_commander"
-                  ? ally.weaponMode === "blaster"
-                    ? (ally.damage + 1) * state.player.damageMultiplier
+                ally.kind === "padawan"
+                  ? 3.25 * state.player.damageMultiplier
+                  : ally.kind === "clone_commander"
+                  ? ally.weaponMode === "heavy_blaster"
+                    ? (ally.damage + 1.5) * state.player.damageMultiplier
                     : ally.damage * state.player.damageMultiplier
+                  : ally.weaponMode === "pistol"
+                    ? Math.max(0.5, ally.damage * 0.5) * state.player.damageMultiplier
                   : ally.damage * state.player.damageMultiplier,
                 target.x + target.w / 2,
                 target.y + 12,
@@ -4269,11 +4870,19 @@ export function KnightBattleGame() {
                 state,
                 target.x + target.w / 2,
                 target.y + 12,
-                ally.kind === "sniper" ? 7 : 4,
+                ally.kind === "sniper" ? 7 : ally.kind === "padawan" ? 6 : 4,
                 ally.kind === "medic_clone"
                   ? "#79f2a6"
+                  : ally.kind === "padawan"
+                    ? "#b18cff"
+                  : ally.kind === "phase1_clone"
+                    ? "#9fd0ff"
                   : ally.kind === "clone_commander"
-                    ? "#8bd3ff"
+                    ? ally.weaponMode === "heavy_blaster"
+                      ? "#ffb056"
+                      : "#ff9680"
+                    : ally.weaponMode === "pistol"
+                      ? "#ff9680"
                     : ally.kind === "sniper"
                       ? "#d7e8ff"
                       : "#5ab4ff"
@@ -4285,7 +4894,11 @@ export function KnightBattleGame() {
               const damaged = damageEnemy(
                 state,
                 target,
-                ally.damage * state.player.damageMultiplier,
+                (ally.kind === "padawan"
+                  ? ally.weaponMode === "double_lightsaber"
+                    ? 5.5
+                    : 4.25
+                  : ally.damage) * state.player.damageMultiplier,
                 target.x + target.w / 2,
                 target.y + target.h / 2,
                 "melee"
@@ -4525,6 +5138,23 @@ export function KnightBattleGame() {
 
       drawBackground(ctx, state.elapsed, state.enemies.length);
 
+      for (const drop of state.supportDrops) {
+        drawGroundShadow(ctx, drop.x, drop.targetY + 34, 34, 7, drop.phase === "ascending" ? 0.12 : 0.24);
+        ctx.fillStyle = "#7e6553";
+        ctx.fillRect(Math.round(drop.x) - 34, Math.round(drop.y), 68, 16);
+        ctx.fillRect(Math.round(drop.x) - 16, Math.round(drop.y) - 10, 30, 10);
+        ctx.fillRect(Math.round(drop.x) + 18, Math.round(drop.y) + 3, 12, 7);
+        ctx.fillStyle = "#d7dde7";
+        ctx.fillRect(Math.round(drop.x) - 20, Math.round(drop.y) + 5, 16, 2);
+        ctx.fillRect(Math.round(drop.x) + 2, Math.round(drop.y) + 5, 12, 2);
+        ctx.fillStyle = "#8fd4ff";
+        ctx.fillRect(Math.round(drop.x) - 12, Math.round(drop.y) - 6, 8, 3);
+        if (drop.phase === "landing") {
+          ctx.fillStyle = "#d7dde7";
+          ctx.fillRect(Math.round(drop.x) - 10, Math.round(drop.y) + 16, 20, 5);
+        }
+      }
+
       for (const coin of state.coins) {
         const bobOffset = Math.sin(coin.bob) * 3;
         drawGroundShadow(ctx, coin.x, coin.y + 15, 10, 4, 0.18);
@@ -4548,57 +5178,17 @@ export function KnightBattleGame() {
         const panelX = Math.round(clamp(chest.x + 28, 20, WIDTH - 260));
         const panelY = Math.round(clamp(chest.y - 132, 140, FLOOR_Y - 146));
         const weaponHitsLeft = chestHitsLeftForWeapon(chest, state.player.weapon);
-        const abilityChestGroups: AbilityKind[][] = [
-          ["fireball", "spike_trap", "poison_trap", "dash_strike", "heal_pulse", "auto_regen"],
-          ["freeze_blast", "turret_droid", "shield_bubble", "coin_magnet", "double_attack", "double_strength", "fortify"]
-        ];
-        const abilityChestLines = abilityChestGroups.map((line) =>
-          line
-            .map((ability) => {
-              const unlocked =
-                abilityLevel(state.player, ability) > 0 || discoveredAbilities.includes(ability);
-              return `${abilityLabel(ability)} ${unlocked ? "Unlocked" : "Not unlocked"}`;
-            })
-            .join(" | ")
-        );
         ctx.fillStyle = "rgba(17, 24, 39, 0.88)";
-        ctx.fillRect(panelX, panelY, 238, 126);
+        ctx.fillRect(panelX, panelY, 238, 62);
         ctx.strokeStyle = "#e2b76a";
         ctx.lineWidth = 3;
-        ctx.strokeRect(panelX, panelY, 238, 126);
+        ctx.strokeRect(panelX, panelY, 238, 62);
         ctx.fillStyle = "#fff1c1";
         ctx.font = 'bold 16px "Courier New", monospace';
         ctx.fillText("CHEST", panelX + 12, panelY + 22);
         ctx.fillStyle = "#f4f7fb";
         ctx.font = '13px "Courier New", monospace';
         ctx.fillText(`${weaponLabel(state.player.weapon)}: ${weaponHitsLeft} hit${weaponHitsLeft === 1 ? "" : "s"} left`, panelX + 12, panelY + 42);
-        const chestRuleLineOne = [
-          isWeaponUnlocked(state.player, "lightsaber") ? "Saber 2" : null,
-          isWeaponUnlocked(state.player, "double_lightsaber") ? "Double 1" : null,
-          isWeaponUnlocked(state.player, "blaster") ? "Blaster 10" : null
-        ]
-          .filter((rule): rule is string => Boolean(rule))
-          .join(" | ");
-        const chestRuleLineTwo = [
-          isWeaponUnlocked(state.player, "heavy_blaster") ? "Heavy 5" : null,
-          isWeaponUnlocked(state.player, "ion_blaster") ? "Ion 5" : null,
-          isWeaponUnlocked(state.player, "dual_pistol") ? "Dual 5" : null,
-          isWeaponUnlocked(state.player, "lightsaber_gun") ? "LS Gun 5" : null,
-          state.player.fireballLevel > 0 ? "Fireball 2" : null
-        ]
-          .filter((rule): rule is string => Boolean(rule))
-          .join(" | ");
-        if (chestRuleLineOne) {
-          ctx.fillText(chestRuleLineOne, panelX + 12, panelY + 60);
-        }
-        if (chestRuleLineTwo) {
-          ctx.fillText(chestRuleLineTwo, panelX + 12, panelY + 78);
-        }
-        ctx.fillStyle = "#fff1c1";
-        ctx.fillText("Abilities", panelX + 12, panelY + 96);
-        ctx.fillStyle = "#f4f7fb";
-        ctx.fillText(abilityChestLines[0], panelX + 12, panelY + 112);
-        ctx.fillText(abilityChestLines[1], panelX + 12, panelY + 128);
       }
 
       for (const trap of state.spikeTraps) {
@@ -4852,15 +5442,44 @@ export function KnightBattleGame() {
     setHud(makeHud(state));
   };
 
-  const buySpecialTroop = (kind: "clone_commander" | "medic_clone", cost: number) => {
+  const specialTroopCount = (kind: "clone_commander" | "medic_clone" | "padawan") =>
+    stateRef.current.allies.filter((ally) => ally.kind === kind).length;
+
+  const specialTroopLimit = (kind: "clone_commander" | "medic_clone" | "padawan") => {
+    if (kind === "padawan") return 2;
+    if (kind === "medic_clone") return 5;
+    return 1 + specialTroopCount("padawan");
+  };
+
+  const buySpecialTroop = (kind: "clone_commander" | "medic_clone" | "padawan", cost: number) => {
     const state = stateRef.current;
     if (screen !== "playing" || state.player.silverCoins < cost) return;
-    if (state.allies.some((ally) => ally.kind === kind)) return;
+    if (specialTroopCount(kind) >= specialTroopLimit(kind)) return;
 
     state.player.silverCoins -= cost;
     writeCurrentCoinBalance(state.player.silverCoins);
     addAlly(state, kind);
     setSelectedTroopIndex(state.allies.length - 1);
+    setHud(makeHud(state));
+  };
+
+  const buySupportDrop = () => {
+    const state = stateRef.current;
+    if (screen !== "playing" || state.player.silverCoins < SHOP_COSTS.supportDrop) return;
+    state.player.silverCoins -= SHOP_COSTS.supportDrop;
+    writeCurrentCoinBalance(state.player.silverCoins);
+    state.supportDrops.push({
+      id: state.nextSupportDropId++,
+      x: supportDropTargetX(state),
+      y: -96,
+      targetY: FLOOR_Y - 96,
+      phase: "descending",
+      timer: 0,
+      cloneCount: 4 + Math.floor(Math.random() * 3),
+      spawned: false,
+      impactRadius: 42
+    });
+    setHelpOpen(false);
     setHud(makeHud(state));
   };
 
@@ -5047,7 +5666,9 @@ export function KnightBattleGame() {
             <span>Score {hud.score}</span>
             <span>Level {hud.level}</span>
             <span>Wave {waveWithinLevel(hud.wave)}/{WAVES_PER_LEVEL}</span>
-            <span>Enemies {hud.enemyCount}</span>
+            <span>
+              Battle Droids {hud.battleDroidCount} | Super Battle Droids {hud.superBattleDroidCount} | Droidekas {hud.droidekaCount} | Commandos {hud.commandoDroidCount}
+            </span>
             <span>Rank {hud.waveLabel}</span>
             <span>Gems {gems}</span>
             <span>Cores {permanentCores}</span>
@@ -5384,7 +6005,43 @@ export function KnightBattleGame() {
               >
                 Run Saves
               </button>
+              <button
+                className="runSavesButton"
+                type="button"
+                onClick={() => setHelpOpen(true)}
+              >
+                Help
+              </button>
             </>
+          ) : null}
+          {helpOpen ? (
+            <div className="arenaAbilityOverlay">
+              <div className="arenaAbilityPanel">
+                <p className="shopKicker">Help</p>
+                <h2>Call A Support Drop</h2>
+                <p>
+                  Spend <strong>20 Gold / 200 Silver</strong> to call a clone support ship. It lands on droids only,
+                  crushes any enemy in the landing zone, and unloads 4-6 weaker Phase 1 clones. It will not hurt you,
+                  Jedi, Padawans, or your clones.
+                </p>
+                <div className="arenaAbilityGrid">
+                  <button
+                    className="arenaAbilityCard"
+                    type="button"
+                    disabled={screen !== "playing" || stateRef.current.player.silverCoins < SHOP_COSTS.supportDrop}
+                    onClick={buySupportDrop}
+                  >
+                    <strong>Support Drop</strong>
+                    <span>Call the ship now.</span>
+                  </button>
+                </div>
+                <div className="authActions battleDexActions">
+                  <button className="secondaryButton" type="button" onClick={() => setHelpOpen(false)}>
+                    Close Help
+                  </button>
+                </div>
+              </div>
+            </div>
           ) : null}
           {questsOpen ? (
             <div className="arenaAbilityOverlay">
@@ -5692,9 +6349,11 @@ export function KnightBattleGame() {
                     >
                       <strong>{abilityLabel(ability)}</strong>
                       <span>
-                        {abilityLevel(stateRef.current.player, ability) > 0 || discoveredAbilities.includes(ability)
+                        {abilityLevel(stateRef.current.player, ability) > 0
                           ? abilityDescription(ability)
-                          : "Not unlocked"}
+                          : discoveredAbilities.includes(ability)
+                            ? `Not unlocked this run - ${abilityDescription(ability)}`
+                            : "Not unlocked this run"}
                       </span>
                     </button>
                   ))}
@@ -5887,12 +6546,12 @@ export function KnightBattleGame() {
                     type="button"
                     disabled={
                       stateRef.current.player.silverCoins < SHOP_COSTS.cloneCommander ||
-                      stateRef.current.allies.some((ally) => ally.kind === "clone_commander")
+                      specialTroopCount("clone_commander") >= specialTroopLimit("clone_commander")
                     }
                     onClick={() => buySpecialTroop("clone_commander", SHOP_COSTS.cloneCommander)}
                   >
-                    {stateRef.current.allies.some((ally) => ally.kind === "clone_commander")
-                      ? "Clone Commander - Already Hired"
+                    {specialTroopCount("clone_commander") >= specialTroopLimit("clone_commander")
+                      ? `Clone Commander - Limit ${specialTroopLimit("clone_commander")}/${specialTroopLimit("clone_commander")}`
                       : `Clone Commander - ${SHOP_COSTS.cloneCommander} Silver`}
                   </button>
                   <button
@@ -5900,13 +6559,26 @@ export function KnightBattleGame() {
                     type="button"
                     disabled={
                       stateRef.current.player.silverCoins < SHOP_COSTS.medicClone ||
-                      stateRef.current.allies.some((ally) => ally.kind === "medic_clone")
+                      specialTroopCount("medic_clone") >= specialTroopLimit("medic_clone")
                     }
                     onClick={() => buySpecialTroop("medic_clone", SHOP_COSTS.medicClone)}
                   >
-                    {stateRef.current.allies.some((ally) => ally.kind === "medic_clone")
-                      ? "Medic Clone - Already Hired"
+                    {specialTroopCount("medic_clone") >= specialTroopLimit("medic_clone")
+                      ? `Medic Clone - Limit ${specialTroopLimit("medic_clone")}/${specialTroopLimit("medic_clone")}`
                       : `Medic Clone - ${SHOP_COSTS.medicClone} Silver`}
+                  </button>
+                  <button
+                    className="shopButton"
+                    type="button"
+                    disabled={
+                      stateRef.current.player.silverCoins < SHOP_COSTS.padawan ||
+                      specialTroopCount("padawan") >= specialTroopLimit("padawan")
+                    }
+                    onClick={() => buySpecialTroop("padawan", SHOP_COSTS.padawan)}
+                  >
+                    {specialTroopCount("padawan") >= specialTroopLimit("padawan")
+                      ? `Padawan - Limit ${specialTroopLimit("padawan")}/${specialTroopLimit("padawan")}`
+                      : `Padawan - ${SHOP_COSTS.padawan} Silver`}
                   </button>
                   <button
                     className="shopButton"
@@ -6230,11 +6902,13 @@ export function KnightBattleGame() {
           {stateRef.current.player.weapon === "lightsaber_gun" ? (
             <p>Lightsaber Gun Controls: <strong>Q</strong> slash | <strong>W</strong> shoot | <strong>R</strong> equip</p>
           ) : stateRef.current.player.weapon === "dual_pistol" ? (
-            <p>Dual Pistol Controls: <strong>C</strong> equip | shoots two nearby droids at once.</p>
+            <p>Dual Pistol Controls: <strong>C</strong> equip | each Space press fires one 50% shot, then another 50% shot follows 0.2s later.</p>
           ) : null}
           {mathError ? <p className="menuError">{mathError}</p> : null}
           <p>
-            Health {Math.ceil(hud.health)} | Gold {hud.goldCoins} | Silver {hud.silverCoins} | Gems {gems} | Cores {permanentCores} | Kills {hud.kills} | Enemies {hud.enemyCount}
+            Health {Math.ceil(hud.health)} | Gold {hud.goldCoins} | Silver {hud.silverCoins} | Gems {gems} | Cores {permanentCores} | Kills {hud.kills}
+            {" | "}
+            Battle Droids {hud.battleDroidCount} | Super Battle Droids {hud.superBattleDroidCount} | Droidekas {hud.droidekaCount} | Commandos {hud.commandoDroidCount}
             {" | "}
             Regular Troopers {hud.squireCount} | 501st Clone Troopers {hud.archerCount} | Shield Troopers {hud.shieldsmanCount} | Sniper Clones {hud.sniperCount} | Player Shields {hud.shieldBlocks} | Troop Shields {hud.troopShieldBlocks}
           </p>
