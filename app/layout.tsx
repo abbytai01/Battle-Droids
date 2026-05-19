@@ -2,8 +2,8 @@ import "./globals.css";
 import type { Metadata } from "next";
 
 export const metadata: Metadata = {
-  title: "Battle Droids",
-  description: "A retro-inspired browser battle game with troop shops, weapon swaps, and upgrade chests."
+  title: "Military Tycoon",
+  description: "A playable 3D military tycoon with movement, shop pads, castle defense, and automatic troop battles."
 };
 
 export default function RootLayout({

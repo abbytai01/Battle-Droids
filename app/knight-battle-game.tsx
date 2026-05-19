@@ -114,7 +114,7 @@ type QuestId =
   | "gold_legend"
   | "quest_master";
 
-type EnemyKind = "scout" | "brute" | "commando" | "droideka" | "sith";
+type EnemyKind = "scout" | "brute" | "commando" | "droideka" | "stap" | "sith";
 type AllyKind =
   | "squire"
   | "archer"
@@ -413,6 +413,7 @@ type HudState = {
   superBattleDroidCount: number;
   droidekaCount: number;
   commandoDroidCount: number;
+  stapCount: number;
   waveLabel: string;
   squireCount: number;
   archerCount: number;
@@ -597,7 +598,7 @@ function weaponDescription(weapon: WeaponType) {
   if (weapon === "dual_pistol") return "Twin blasters where both shots deal 50% damage, and the second shot fires automatically a moment later. Opens chests in 5 shots.";
   if (weapon === "lightsaber_gun") return "A hybrid weapon that shoots blasts and can slash up close with Q. Opens chests in 5 hits.";
   if (weapon === "heavy_blaster") return "Long range, heavy damage, and opens chests in 5 shots.";
-  if (weapon === "double_lightsaber") return "Wide melee swings that can hit more enemies up close. Opens chests in 1 hit.";
+  if (weapon === "double_lightsaber") return "Wide melee swings with double the strength of a regular lightsaber. Opens chests in 1 hit.";
   if (weapon === "ion_blaster") return "Shorter range, very strong shots with extra impact. Opens chests in 5 shots.";
   if (weapon === "blaster") return "Basic ranged weapon. Opens chests in 10 shots.";
   return "Fast melee weapon. Opens chests in 2 hits.";
@@ -638,6 +639,28 @@ function weaponRange(weapon: WeaponType) {
   if (weapon === "blaster") return 170;
   if (weapon === "double_lightsaber") return 68;
   return 48;
+}
+
+function playerWeaponBaseDamage(player: Player, hybridMeleeAttack: boolean) {
+  if (player.weapon === "double_lightsaber") {
+    return player.comboStep === 3 ? 12 : 10;
+  }
+  if (player.weapon === "lightsaber_gun") {
+    return hybridMeleeAttack ? 8 : 7.25;
+  }
+  if (player.weapon === "lightsaber") {
+    return player.comboStep === 3 ? 6 : 5;
+  }
+  if (player.weapon === "heavy_blaster") {
+    return 4.5;
+  }
+  if (player.weapon === "dual_pistol") {
+    return 2;
+  }
+  if (player.weapon === "ion_blaster") {
+    return 3;
+  }
+  return 1.5;
 }
 
 function isWeaponUnlocked(player: Player, weapon: WeaponType) {
@@ -1121,6 +1144,7 @@ function makeHudState(state: GameState): HudState {
     superBattleDroidCount: state.enemies.filter((enemy) => enemy.kind === "brute").length,
     droidekaCount: state.enemies.filter((enemy) => enemy.kind === "droideka").length,
     commandoDroidCount: state.enemies.filter((enemy) => enemy.kind === "commando").length,
+    stapCount: state.enemies.filter((enemy) => enemy.kind === "stap").length,
     waveLabel: rankLabel(state.player.score),
     squireCount: state.allies.filter((ally) => ally.kind === "squire").length,
     archerCount: state.allies.filter((ally) => ally.kind === "archer").length,
@@ -1167,15 +1191,29 @@ function spawnEnemy(state: GameState, forcedKind?: EnemyKind) {
   const bruteChance = clamp(0.18 + state.level * 0.07, 0.18, 0.55);
   const roll = Math.random();
   const rolledKind: EnemyKind =
-    state.wave >= 40 && roll < 0.3
+    !isBossWave(state.wave) && roll < 0.18
+      ? "stap"
+      : state.wave >= 40 && roll < 0.36
       ? "droideka"
-      : state.wave >= 20 && roll < 0.42
+      : state.wave >= 20 && roll < 0.48
         ? "commando"
       : roll < bruteChance
         ? "brute"
         : "scout";
   const kind: EnemyKind = forcedKind ?? rolledKind;
-  const y = FLOOR_Y - (kind === "sith" ? 96 : kind === "brute" ? 84 : kind === "droideka" ? 72 : kind === "commando" ? 70 : 64);
+  const y =
+    FLOOR_Y -
+    (kind === "sith"
+      ? 96
+      : kind === "brute"
+        ? 84
+        : kind === "stap"
+          ? 96
+          : kind === "droideka"
+            ? 72
+            : kind === "commando"
+              ? 70
+              : 64);
   const fromLeft =
     state.wave >= 20 && state.wave <= 39
       ? Math.random() < 0.5
@@ -1273,6 +1311,28 @@ function spawnEnemy(state: GameState, forcedKind?: EnemyKind) {
           hitsTaken: 0,
           rolling: true
         }
+      : kind === "stap"
+        ? {
+            id: state.nextEnemyId++,
+            kind,
+            x: fromLeft ? -74 : WIDTH + 28,
+            y,
+            w: 50,
+            h: 46,
+            speed: 138 + state.level * 8 + speedBoost * 0.55,
+            health: 3 + Math.floor(state.level / 3) + Math.floor(healthBoost / 2),
+            maxHealth: 3 + Math.floor(state.level / 3) + Math.floor(healthBoost / 2),
+            attackRange: 122,
+            damage: 0.75 + damageBoost,
+            attackCooldown: 0.9,
+            attackTimer: 0,
+            attackWindup: 0,
+            hitByAttack: -1,
+            facing: fromLeft ? 1 : -1,
+            tint: "#8b6a38",
+            scoreValue: 20 + Math.floor(state.wave / 2),
+            knockback: 20
+          }
       : {
           id: state.nextEnemyId++,
           kind,
@@ -2095,9 +2155,14 @@ function drawHealthHeartsWithPulse(
 
 function drawPlayerAttackRange(ctx: CanvasRenderingContext2D, player: Player) {
   const range = weaponRange(player.weapon);
-  const startX = player.facing === 1 ? player.x + player.w : player.x;
-  const endX = startX + player.facing * range;
   const y = player.y + 32;
+  const isDoubleSaber = player.weapon === "double_lightsaber";
+  const startX = isDoubleSaber
+    ? player.x + player.w / 2 - range
+    : player.facing === 1 ? player.x + player.w : player.x;
+  const endX = isDoubleSaber
+    ? player.x + player.w / 2 + range
+    : startX + player.facing * range;
 
   ctx.save();
   ctx.setLineDash([8, 6]);
@@ -2294,9 +2359,19 @@ function drawPixelKnight(
 
     if (player.attackTimer > 0) {
       ctx.fillStyle = isDoubleSaber || character === "Mace Windu" ? "rgba(180, 124, 255, 0.32)" : "rgba(126, 200, 255, 0.32)";
-      ctx.fillRect(facing === 1 ? bladeX + 4 : bladeX - 8, handY - 6, isDoubleSaber ? 58 : 40, 16);
+      ctx.fillRect(
+        isDoubleSaber ? x - 48 : facing === 1 ? bladeX + 4 : bladeX - 8,
+        handY - 6,
+        isDoubleSaber ? 134 : 40,
+        16
+      );
       ctx.fillStyle = bladeColor;
-      ctx.fillRect(facing === 1 ? bladeX + 6 : bladeX - 10, handY - 1, isDoubleSaber ? 60 : 42, 6);
+      ctx.fillRect(
+        isDoubleSaber ? x - 50 : facing === 1 ? bladeX + 6 : bladeX - 10,
+        handY - 1,
+        isDoubleSaber ? 138 : 42,
+        6
+      );
     }
   } else {
     const gunX = facing === 1 ? handX + 1 : handX - 20;
@@ -2419,6 +2494,45 @@ function drawEnemy(ctx: CanvasRenderingContext2D, enemy: Enemy) {
     ctx.fill();
     const healthRatio = enemy.health / enemy.maxHealth;
     drawBeveledBar(ctx, x, y - 10, enemy.w, 6, healthRatio, "#91d7ff", "#d7f3ff");
+    return;
+  }
+
+  if (enemy.kind === "stap") {
+    const bodyX = enemy.facing === 1 ? x + 18 : x + 8;
+    const noseX = enemy.facing === 1 ? x + 38 : x + 2;
+    const riderX = enemy.facing === 1 ? x + 18 : x + 20;
+
+    ctx.fillStyle = "#3f2d1d";
+    ctx.fillRect(bodyX, y + 22, 22, 10);
+    ctx.fillStyle = "#9b7239";
+    ctx.fillRect(bodyX + 4, y + 16, 18, 9);
+    ctx.fillStyle = "#d4a64f";
+    ctx.fillRect(noseX, y + 19, 10, 6);
+    ctx.fillStyle = "#2a1f19";
+    ctx.fillRect(enemy.facing === 1 ? bodyX - 4 : bodyX + 22, y + 27, 9, 4);
+    ctx.fillStyle = "#71522c";
+    ctx.fillRect(bodyX + 7, y + 32, 5, 10);
+    ctx.fillRect(bodyX + 16, y + 31, 5, 11);
+
+    ctx.fillStyle = "#b57f46";
+    ctx.fillRect(riderX, y + 6, 16, 19);
+    ctx.fillStyle = "#6f4121";
+    ctx.fillRect(riderX + 2, y, 12, 10);
+    ctx.fillStyle = "#efe2c5";
+    ctx.fillRect(riderX + 5, y + 4, 6, 4);
+    ctx.fillStyle = "#1b1f29";
+    ctx.fillRect(riderX + 4, y + 24, 4, 10);
+    ctx.fillRect(riderX + 11, y + 24, 4, 10);
+
+    ctx.fillStyle = "#0f172a";
+    ctx.fillRect(enemy.facing === 1 ? x + 42 : x - 10, y + 18, 14, 4);
+    if (enemy.attackWindup > 0.12) {
+      ctx.fillStyle = "rgba(255, 190, 82, 0.55)";
+      ctx.fillRect(enemy.facing === 1 ? x + 50 : x - 20, y + 17, 18, 6);
+    }
+
+    const healthRatio = enemy.health / enemy.maxHealth;
+    drawBeveledBar(ctx, x + 4, y - 10, enemy.w - 8, 6, healthRatio, "#ffc766", "#fff0bd");
     return;
   }
 
@@ -4308,7 +4422,8 @@ export function KnightBattleGame() {
 
         const spawnDelay = Math.max(1.45 - state.level * 0.08, 0.45);
         if (!state.bossActive && state.waveSpawnsLeft > 0 && state.spawnTimer <= 0) {
-          spawnEnemy(state);
+          const firstSpawnOfWave = state.waveSpawnsLeft === enemiesToSpawnForWave(state.wave);
+          spawnEnemy(state, firstSpawnOfWave && !isBossWave(state.wave) ? "stap" : undefined);
           state.waveSpawnsLeft -= 1;
           if (state.waveSpawnsLeft > 0 && state.level >= 4 && Math.random() < 0.24) {
             spawnEnemy(state);
@@ -4384,9 +4499,15 @@ export function KnightBattleGame() {
         const slashBox =
           player.attackTimer > 0 && (isMeleeWeapon(player.weapon) || hybridMeleeAttack)
             ? {
-                x: player.facing === 1 ? player.x + player.w - 4 : player.x - weaponRange(player.weapon) + 4,
+                x:
+                  player.weapon === "double_lightsaber"
+                    ? player.x + player.w / 2 - weaponRange(player.weapon)
+                    : player.facing === 1 ? player.x + player.w - 4 : player.x - weaponRange(player.weapon) + 4,
                 y: player.y + (player.weapon === "double_lightsaber" ? 8 : hybridMeleeAttack ? 10 : 12),
-                w: hybridMeleeAttack ? 56 : weaponRange(player.weapon),
+                w:
+                  player.weapon === "double_lightsaber"
+                    ? weaponRange(player.weapon) * 2
+                    : hybridMeleeAttack ? 56 : weaponRange(player.weapon),
                 h: player.weapon === "double_lightsaber" ? 44 : 34
               }
             : null;
@@ -4571,20 +4692,7 @@ export function KnightBattleGame() {
           for (const enemy of attackTargets) {
             enemy.hitByAttack = player.attackId;
             player.attackHits += 1;
-            const baseDamage =
-              player.weapon === "double_lightsaber"
-                ? player.comboStep === 3 ? 6.25 : 5.25
-                : player.weapon === "lightsaber_gun"
-                  ? player.attackStyle === "hybrid_melee" ? 4.75 : 3.25
-                : player.weapon === "dual_pistol"
-                  ? 1.375
-                : player.weapon === "heavy_blaster"
-                  ? 3.5
-                  : player.weapon === "ion_blaster"
-                    ? 2.5
-                : player.weapon === "blaster"
-                  ? 1.5
-                  : player.comboStep === 3 ? 5 : 4.25;
+            const baseDamage = playerWeaponBaseDamage(player, hybridMeleeAttack);
             const damage = (baseDamage + player.bonusDamage) * player.damageMultiplier;
             const damaged = damageEnemy(
               state,
@@ -4595,6 +4703,10 @@ export function KnightBattleGame() {
               isMeleeWeapon(player.weapon) || hybridMeleeAttack ? "melee" : "ranged"
             );
             if (damaged) {
+              const hitDirection =
+                player.weapon === "double_lightsaber"
+                  ? enemy.x + enemy.w / 2 >= player.x + player.w / 2 ? 1 : -1
+                  : player.facing;
               const weaponKnockback =
                 player.weapon === "ion_blaster"
                   ? 22
@@ -4603,7 +4715,7 @@ export function KnightBattleGame() {
                   : player.weapon === "dual_pistol"
                     ? 10
                   : player.weapon === "heavy_blaster" ? 18 : player.weapon === "blaster" ? 8 : player.comboStep * 8;
-              enemy.x += player.facing * (enemy.knockback + weaponKnockback);
+              enemy.x += hitDirection * (enemy.knockback + weaponKnockback);
             }
             spawnParticleBurst(
               state,
@@ -5667,7 +5779,7 @@ export function KnightBattleGame() {
             <span>Level {hud.level}</span>
             <span>Wave {waveWithinLevel(hud.wave)}/{WAVES_PER_LEVEL}</span>
             <span>
-              Battle Droids {hud.battleDroidCount} | Super Battle Droids {hud.superBattleDroidCount} | Droidekas {hud.droidekaCount} | Commandos {hud.commandoDroidCount}
+              Battle Droids {hud.battleDroidCount} | Super Battle Droids {hud.superBattleDroidCount} | Droidekas {hud.droidekaCount} | Commandos {hud.commandoDroidCount} | STAPs {hud.stapCount}
             </span>
             <span>Rank {hud.waveLabel}</span>
             <span>Gems {gems}</span>
@@ -6908,7 +7020,7 @@ export function KnightBattleGame() {
           <p>
             Health {Math.ceil(hud.health)} | Gold {hud.goldCoins} | Silver {hud.silverCoins} | Gems {gems} | Cores {permanentCores} | Kills {hud.kills}
             {" | "}
-            Battle Droids {hud.battleDroidCount} | Super Battle Droids {hud.superBattleDroidCount} | Droidekas {hud.droidekaCount} | Commandos {hud.commandoDroidCount}
+            Battle Droids {hud.battleDroidCount} | Super Battle Droids {hud.superBattleDroidCount} | Droidekas {hud.droidekaCount} | Commandos {hud.commandoDroidCount} | STAPs {hud.stapCount}
             {" | "}
             Regular Troopers {hud.squireCount} | 501st Clone Troopers {hud.archerCount} | Shield Troopers {hud.shieldsmanCount} | Sniper Clones {hud.sniperCount} | Player Shields {hud.shieldBlocks} | Troop Shields {hud.troopShieldBlocks}
           </p>

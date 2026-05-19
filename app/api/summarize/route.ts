@@ -1,15 +1,12 @@
 import OpenAI from "openai";
 import { NextResponse } from "next/server";
 
-const client = new OpenAI({
-  apiKey: process.env.OPENAI_API_KEY
-});
-
 export async function POST(request: Request) {
   try {
     const { text } = await request.json();
+    const apiKey = process.env.OPENAI_API_KEY;
 
-    if (!process.env.OPENAI_API_KEY) {
+    if (!apiKey) {
       return NextResponse.json(
         { error: "Missing OPENAI_API_KEY in .env.local" },
         { status: 500 }
@@ -22,6 +19,8 @@ export async function POST(request: Request) {
         { status: 400 }
       );
     }
+
+    const client = new OpenAI({ apiKey });
 
     const response = await client.responses.create({
       model: "gpt-4.1-mini",

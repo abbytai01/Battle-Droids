@@ -1,5 +1,5 @@
-import { KnightBattleGame } from "./knight-battle-game";
+import { TycoonGame } from "./tycoon-game";
 
 export default function HomePage() {
-  return <KnightBattleGame />;
+  return <TycoonGame />;
 }
